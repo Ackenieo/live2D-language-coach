@@ -1,0 +1,18 @@
+{
+  "name": "live2d-language-coach",
+  "version": "1.0.0",
+  "description": "基于 DDD（领域驱动设计）邻域架构的 Spring Boot 3.5 项目，集成 MyBatis-Plus、Redis、MySQL。",
+  "main": "test-ws.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "ws": "^8.21.0"
+  }
+}

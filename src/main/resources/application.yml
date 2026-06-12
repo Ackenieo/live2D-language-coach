@@ -1,0 +1,5 @@
+spring:
+  config:
+    name: live2D-language-coach
+  profiles:
+    active: dev

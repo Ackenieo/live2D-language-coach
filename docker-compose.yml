@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: live2d-language-coach-redis
+    ports:
+      - "6454:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    networks:
+      - live2d-language-coach-network
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.0
+    container_name: live2d-language-coach-mysql
+    ports:
+      - "3381:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: root123456
+      MYSQL_DATABASE: live2d_language_coach
+      MYSQL_USER: init_pro
+      MYSQL_PASSWORD: init_pro123
+    volumes:
+      - mysql-data:/var/lib/mysql
+    networks:
+      - live2d-language-coach-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  redis-data:
+  mysql-data:
+
+networks:
+  live2d-language-coach-network:
+    driver: bridge
