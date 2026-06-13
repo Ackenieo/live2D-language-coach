@@ -1,14 +1,23 @@
 package com.ackenieo.init_pro.realtime.interfaces.ws;
 
+import com.ackenieo.init_pro.conversation.domain.entity.ChatSession;
+import com.ackenieo.init_pro.conversation.domain.service.ChatSessionService;
 import com.ackenieo.init_pro.conversation.domain.service.ConversationMemoryService;
 import com.ackenieo.init_pro.conversation.domain.service.PromptTemplateService;
+import com.ackenieo.init_pro.evaluation.domain.entity.PronunciationResult;
+import com.ackenieo.init_pro.evaluation.domain.event.GrammarCorrectedEvent;
+import com.ackenieo.init_pro.evaluation.domain.event.PronunciationEvaluatedEvent;
+import com.ackenieo.init_pro.realtime.domain.event.AiAudioDeltaEvent;
+import com.ackenieo.init_pro.realtime.domain.event.AiSubtitleCompleteEvent;
+import com.ackenieo.init_pro.realtime.domain.event.AiSubtitleDeltaEvent;
+import com.ackenieo.init_pro.realtime.domain.event.UserTranscriptCompleteEvent;
 import com.ackenieo.init_pro.realtime.domain.gateway.RealtimeChatClient;
 import com.ackenieo.init_pro.realtime.domain.gateway.RealtimeChatClientFactory;
-import com.ackenieo.init_pro.realtime.infrastructure.config.BailianConfig;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.CloseStatus;
@@ -16,6 +25,7 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.AbstractWebSocketHandler;
 
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Map;
 import java.util.UUID;
@@ -23,34 +33,113 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 对话 WebSocket Handler
- * 通过 RealtimeChatClientFactory 创建客户端，不再直接依赖 BailianRealtimeClient
+ * 监听领域事件，转发到前端 WebSocket
  */
 @Component
 public class ChatWebSocketHandler extends AbstractWebSocketHandler {
     private static final Logger log = LoggerFactory.getLogger(ChatWebSocketHandler.class);
     private static final ObjectMapper objectMapper = new ObjectMapper();
 
+    /** sessionId → RealtimeChatClient */
     private final Map<String, RealtimeChatClient> clientMap = new ConcurrentHashMap<>();
+    /** sessionId → 前端 WebSocketSession */
+    private final Map<String, WebSocketSession> sessionMap = new ConcurrentHashMap<>();
     private final Map<String, Boolean> visionEnabledMap = new ConcurrentHashMap<>();
     private final ConversationMemoryService memoryService;
     private final RealtimeChatClientFactory clientFactory;
     private final PromptTemplateService promptTemplateService;
+    private final ChatSessionService chatSessionService;
 
     public ChatWebSocketHandler(ConversationMemoryService memoryService,
                                 RealtimeChatClientFactory clientFactory,
-                                PromptTemplateService promptTemplateService) {
+                                PromptTemplateService promptTemplateService,
+                                ChatSessionService chatSessionService) {
         this.memoryService = memoryService;
         this.clientFactory = clientFactory;
         this.promptTemplateService = promptTemplateService;
+        this.chatSessionService = chatSessionService;
     }
+
+    // ===== 领域事件监听 → 转发前端 =====
+
+    @EventListener
+    public void onAiAudioDelta(AiAudioDeltaEvent event) {
+        WebSocketSession session = sessionMap.get(event.getSessionId());
+        if (session != null && session.isOpen()) {
+            try {
+                session.sendMessage(new BinaryMessage(ByteBuffer.wrap(event.getAudioData())));
+            } catch (IOException e) {
+                log.error("转发AI音频失败, sessionId={}", event.getSessionId(), e);
+            }
+        }
+    }
+
+    @EventListener
+    public void onAiSubtitleDelta(AiSubtitleDeltaEvent event) {
+        sendTextToFrontend(event.getSessionId(), Map.of("type", "ai_subtitle", "text", event.getText()));
+    }
+
+    @EventListener
+    public void onAiSubtitleComplete(AiSubtitleCompleteEvent event) {
+        sendTextToFrontend(event.getSessionId(), Map.of("type", "ai_subtitle_complete", "text", event.getText()));
+    }
+
+    @EventListener
+    public void onUserTranscriptComplete(UserTranscriptCompleteEvent event) {
+        sendTextToFrontend(event.getSessionId(), Map.of(
+                "type", "user_subtitle",
+                "turnId", event.getTurnId(),
+                "text", event.getText()
+        ));
+    }
+
+    @EventListener
+    public void onPronunciationEvaluated(PronunciationEvaluatedEvent event) {
+        PronunciationResult r = event.getResult();
+        sendTextToFrontend(r.sessionId(), Map.ofEntries(
+                Map.entry("type", "pronunciation_score"),
+                Map.entry("turnId", r.turnId() == null ? "" : r.turnId()),
+                Map.entry("text", r.text()),
+                Map.entry("suggestedScore", String.valueOf(r.suggestedScore())),
+                Map.entry("pronAccuracy", String.valueOf(r.pronAccuracy())),
+                Map.entry("pronFluency", String.valueOf(r.pronFluency())),
+                Map.entry("pronCompletion", String.valueOf(r.pronCompletion())),
+                Map.entry("suggestedGrade", r.suggestedGrade()),
+                Map.entry("accuracyGrade", r.accuracyGrade()),
+                Map.entry("fluencyGrade", r.fluencyGrade()),
+                Map.entry("completionGrade", r.completionGrade())
+        ));
+    }
+
+    @EventListener
+    public void onGrammarCorrected(GrammarCorrectedEvent event) {
+        sendTextToFrontend(event.getSessionId(), Map.of(
+                "type", "grammar_correction",
+                "turnId", event.getTurnId() == null ? "" : event.getTurnId(),
+                "text", event.getCorrectedText()
+        ));
+    }
+
+    // ===== WebSocket 生命周期 =====
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         String sessionId = UUID.randomUUID().toString();
         session.getAttributes().put("sessionId", sessionId);
+        sessionMap.put(sessionId, session);
         log.info("前端WebSocket连接已建立, sessionId={}", sessionId);
 
-        RealtimeChatClient client = clientFactory.create(session, sessionId);
+        // 异步入库：创建会话记录
+        String userId = (String) session.getAttributes().get("userId");
+        if (userId != null) {
+            try {
+                chatSessionService.startSession(userId, "default", "medium", "us", sessionId);
+            } catch (Exception e) {
+                log.error("创建会话记录失败, sessionId={}", sessionId, e);
+            }
+        }
+
+        RealtimeChatClient client = clientFactory.create(sessionId);
         clientMap.put(sessionId, client);
         client.connect();
     }
@@ -59,11 +148,10 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
         String sessionId = (String) session.getAttributes().get("sessionId");
         RealtimeChatClient client = clientMap.get(sessionId);
         if (client == null || !client.isConnected()) {
-            // WebSocketClient 不可复用，关闭旧实例并创建新的
             if (client != null) {
                 try { client.close(); } catch (Exception ignored) {}
             }
-            client = clientFactory.create(session, sessionId);
+            client = clientFactory.create(sessionId);
             clientMap.put(sessionId, client);
             client.connect();
         }
@@ -109,7 +197,7 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
                             break;
                         }
                         String image = json.has("image") ? json.get("image").asText() : "";
-                        String prompt = json.has("prompt") ? json.get("prompt").asText() : "\u8bf7\u7b80\u6d01\u63cf\u8ff0\u8fd9\u5f20\u56fe\u7247\u7684\u5185\u5bb9";
+                        String prompt = json.has("prompt") ? json.get("prompt").asText() : "请简洁描述这张图片的内容";
                         if (!image.isEmpty()) {
                             int commaIdx = image.indexOf(',');
                             String pureBase64 = commaIdx >= 0 ? image.substring(commaIdx + 1) : image;
@@ -118,7 +206,6 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
                     }
                 }
                 case "config" -> {
-                    // 处理 vision 字段
                     if (json.has("vision")) {
                         String vision = json.get("vision").asText();
                         boolean hasVision = "on".equalsIgnoreCase(vision);
@@ -162,11 +249,18 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
         String sessionId = (String) session.getAttributes().get("sessionId");
-        RealtimeChatClient client = clientMap.remove(sessionId);
+        sessionMap.remove(sessionId);
         visionEnabledMap.remove(sessionId);
+        RealtimeChatClient client = clientMap.remove(sessionId);
         if (client != null) {
             client.clearCurrentTurn();
             client.close();
+        }
+        // 结束会话记录
+        try {
+            chatSessionService.endSession(sessionId, null);
+        } catch (Exception e) {
+            log.error("结束会话记录失败, sessionId={}", sessionId, e);
         }
         log.info("前端WebSocket连接已关闭, sessionId={}", sessionId);
     }
@@ -177,15 +271,25 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
         afterConnectionClosed(session, CloseStatus.SERVER_ERROR);
     }
 
-    /**
-     * 根据语言、角色和视觉状态构建系统指令
-     */
+    // ===== 私有方法 =====
+
+    private void sendTextToFrontend(String sessionId, Map<String, String> data) {
+        WebSocketSession session = sessionMap.get(sessionId);
+        if (session != null && session.isOpen()) {
+            try {
+                session.sendMessage(new TextMessage(objectMapper.writeValueAsString(data)));
+            } catch (IOException e) {
+                log.error("发送前端失败, sessionId={}", sessionId, e);
+            }
+        }
+    }
+
     static String buildInstructions(String lang, String role, boolean hasVision) {
         if ("zh".equalsIgnoreCase(lang)) {
             if (hasVision) {
-                return "\u4f60\u662f\u4e00\u540d" + role + "\uff0c\u56fe\u7247\u4fe1\u606f\u662f\u4f60\u773c\u955c\u6240\u770b\u5230\u7684\u5185\u5bb9\u3002\u8bf7\u7b80\u6d01\u56de\u7b54\u5e76\u9002\u65f6\u7ea0\u6b63\u7528\u6237\u7684\u82f1\u8bed\u3002";
+                return "你是一名" + role + "，图片信息是你眼镜所看到的内容。请简洁回答并适时纠正用户的英语。";
             }
-            return "\u4f60\u662f\u4e00\u540d" + role + "\u3002\u8bf7\u7b80\u6d01\u56de\u7b54\u5e76\u9002\u65f6\u7ea0\u6b63\u7528\u6237\u7684\u82f1\u8bed\u3002";
+            return "你是一名" + role + "。请简洁回答并适时纠正用户的英语。";
         }
         if (hasVision) {
             return "You are " + role + ", the screenshot is what you see with your eyes. Answer concisely and correct the user's English when appropriate.";

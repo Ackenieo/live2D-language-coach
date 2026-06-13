@@ -29,6 +29,14 @@ public class ChatSessionService {
         return saved;
     }
 
+    public ChatSession startSession(String userId, String scene, String difficulty, String accent, String sessionId) {
+        ChatSession session = new ChatSession(userId, scene, difficulty, accent);
+        session.setId(sessionId);
+        ChatSession saved = chatSessionRepository.save(session);
+        log.info("创建对话会话(指定ID): sessionId={}, userId={}, scene={}", saved.getId(), userId, scene);
+        return saved;
+    }
+
     public ChatSession endSession(String sessionId, String totalGrade) {
         Optional<ChatSession> opt = chatSessionRepository.findById(sessionId);
         if (opt.isEmpty()) {

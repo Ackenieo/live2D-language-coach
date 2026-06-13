@@ -1,13 +1,18 @@
 package com.ackenieo.init_pro.realtime.infrastructure.gateway;
 
 import com.ackenieo.init_pro.conversation.domain.service.ConversationMemoryService;
-import com.ackenieo.init_pro.evaluation.domain.entity.PronunciationResult;
-import com.ackenieo.init_pro.evaluation.domain.gateway.EvaluationResultPublisher;
 import com.ackenieo.init_pro.evaluation.domain.service.AudioTurnBufferService;
 import com.ackenieo.init_pro.evaluation.domain.service.EvaluationService;
+import com.ackenieo.init_pro.realtime.domain.event.AiAudioDeltaEvent;
+import com.ackenieo.init_pro.realtime.domain.event.AiSubtitleCompleteEvent;
+import com.ackenieo.init_pro.realtime.domain.event.AiSubtitleDeltaEvent;
+import com.ackenieo.init_pro.realtime.domain.event.UserTranscriptCompleteEvent;
 import com.ackenieo.init_pro.realtime.domain.gateway.RealtimeChatClient;
 import com.ackenieo.init_pro.realtime.domain.gateway.RealtimeChatClientFactory;
+import com.ackenieo.init_pro.realtime.domain.model.SessionState;
+import com.ackenieo.init_pro.realtime.domain.model.VoiceConfig;
 import com.ackenieo.init_pro.realtime.infrastructure.config.BailianConfig;
+import com.ackenieo.init_pro.shared.domain.DomainEventPublisher;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.java_websocket.client.WebSocketClient;
@@ -16,51 +21,49 @@ import org.java_websocket.handshake.ServerHandshake;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
-import org.springframework.web.socket.BinaryMessage;
-import org.springframework.web.socket.TextMessage;
-import org.springframework.web.socket.WebSocketSession;
 
 import java.net.URI;
-import java.nio.ByteBuffer;
 import java.util.Base64;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * 百炼 Realtime API 客户端
- * 同时实现 EvaluationResultPublisher，将评估结果通过 WebSocket 推送到前端
+ * 通过 DomainEventPublisher 发布领域事件，使用 SessionState/VoiceConfig 值对象管理状态
  */
-public class BailianRealtimeClient extends WebSocketClient implements RealtimeChatClient, EvaluationResultPublisher {
+public class BailianRealtimeClient extends WebSocketClient implements RealtimeChatClient {
     private static final Logger log = LoggerFactory.getLogger(BailianRealtimeClient.class);
     private static final ObjectMapper objectMapper = new ObjectMapper();
-    private final AtomicBoolean connected = new AtomicBoolean(false);
 
-    private final WebSocketSession frontendSession;
+    private final String sessionId;
     private final ConversationMemoryService memoryService;
     private final AudioTurnBufferService audioTurnBufferService;
     private final EvaluationService evaluationService;
+    private final DomainEventPublisher eventPublisher;
     private final BailianConfig bailianConfig;
-    private final String sessionId;
     private final CountDownLatch readyLatch = new CountDownLatch(1);
-    private volatile String currentTurnId;
+    private final AtomicReference<SessionState> sessionState = new AtomicReference<>(new SessionState());
+    private final AtomicReference<VoiceConfig> voiceConfig = new AtomicReference<>(VoiceConfig.DEFAULT);
     private volatile String instructions;
 
-    public BailianRealtimeClient(WebSocketSession frontendSession,
-                                  String sessionId,
+    public BailianRealtimeClient(String sessionId,
                                   ConversationMemoryService memoryService,
                                   AudioTurnBufferService audioTurnBufferService,
                                   EvaluationService evaluationService,
+                                  DomainEventPublisher eventPublisher,
                                   BailianConfig bailianConfig) throws Exception {
         super(new URI(bailianConfig.getWsUrl()), new Draft_6455(), buildHeaders(bailianConfig), 0);
-        this.frontendSession = frontendSession;
         this.sessionId = sessionId;
         this.memoryService = memoryService;
         this.audioTurnBufferService = audioTurnBufferService;
         this.evaluationService = evaluationService;
+        this.eventPublisher = eventPublisher;
         this.bailianConfig = bailianConfig;
         this.instructions = buildDefaultInstructions();
+        this.voiceConfig.set(new VoiceConfig(bailianConfig.getVoice(), Set.of("text", "audio")));
     }
 
     private static String buildDefaultInstructions() {
@@ -79,13 +82,23 @@ public class BailianRealtimeClient extends WebSocketClient implements RealtimeCh
 
     private void sendSessionUpdate() {
         try {
+            VoiceConfig vc = voiceConfig.get();
             String escapedInstructions = instructions
                     .replace("\\", "\\\\")
                     .replace("\"", "\\\"")
                     .replace("\n", "\\n");
+
+            StringBuilder modalitiesJson = new StringBuilder("[");
+            int i = 0;
+            for (String modality : vc.getModalities()) {
+                if (i++ > 0) modalitiesJson.append(",");
+                modalitiesJson.append("\"").append(modality).append("\"");
+            }
+            modalitiesJson.append("]");
+
             String msg = "{\"type\":\"session.update\",\"session\":{\"instructions\":\"" +
-                    escapedInstructions + "\",\"modalities\":[\"text\",\"audio\"],\"voice\":\"" +
-                    bailianConfig.getVoice() + "\"}}";
+                    escapedInstructions + "\",\"modalities\":" + modalitiesJson +
+                    ",\"voice\":\"" + vc.getVoiceName() + "\"}}";
             send(msg);
             log.info("已发送session.update, sessionId={}", sessionId);
         } catch (Exception e) {
@@ -99,8 +112,7 @@ public class BailianRealtimeClient extends WebSocketClient implements RealtimeCh
 
     @Override
     public void onOpen(ServerHandshake handshake) {
-        connected.set(true);
-        log.info("百炼连接已建立");
+        log.info("百炼连接已建立, sessionId={}", sessionId);
     }
 
     @Override
@@ -113,43 +125,48 @@ public class BailianRealtimeClient extends WebSocketClient implements RealtimeCh
 
             switch (type) {
                 case "session.created" -> {
-                    log.info("会话就绪(type=session.created)");
+                    sessionState.updateAndGet(s -> s.withStatus(SessionState.Status.READY));
+                    log.info("会话就绪(type=session.created), state={}", sessionState.get());
                     sendSessionUpdate();
                     readyLatch.countDown();
                 }
                 case "input_audio_buffer.speech_started" -> handleSpeechStarted();
-                case "input_audio_buffer.speech_stopped" -> log.info("检测到语音停止, 等待百炼回复");
+                case "input_audio_buffer.speech_stopped" -> {
+                    sessionState.updateAndGet(s -> s.withStatus(SessionState.Status.PROCESSING));
+                    log.info("检测到语音停止, state={}", sessionState.get());
+                }
                 case "input_audio_buffer.committed" -> log.info("音频已提交");
                 case "conversation.item.created" -> log.info("对话项已创建, 准备生成回复");
                 case "response.audio.delta" -> {
                     byte[] audio = Base64.getDecoder().decode(json.get("delta").asText());
-                    if (frontendSession.isOpen()) {
-                        frontendSession.sendMessage(new BinaryMessage(ByteBuffer.wrap(audio)));
-                    }
+                    eventPublisher.publish(new AiAudioDeltaEvent(sessionId, audio));
                 }
                 case "response.audio_transcript.delta" -> {
                     String text = json.get("delta").asText();
-                    sendToFrontend(Map.of("type", "ai_subtitle", "text", text));
+                    eventPublisher.publish(new AiSubtitleDeltaEvent(sessionId, text));
                 }
                 case "response.audio_transcript.done" -> {
                     String text = json.get("transcript").asText();
-                    sendToFrontend(Map.of("type", "ai_subtitle_complete", "text", text));
+                    eventPublisher.publish(new AiSubtitleCompleteEvent(sessionId, text));
                     if (memoryService != null) {
                         memoryService.saveMessage(sessionId, "assistant", text);
                     }
                 }
-                case "response.done" -> log.info("响应完成");
+                case "response.done" -> {
+                    sessionState.updateAndGet(s -> s.withStatus(SessionState.Status.READY));
+                    log.info("响应完成, state={}", sessionState.get());
+                }
                 case "conversation.item.input_audio_transcription.completed" -> {
                     String text = json.has("transcript") ? json.get("transcript").asText() : "";
                     if (!text.isEmpty()) {
-                        String turnId = currentTurnId;
-                        sendToFrontend(Map.of("type", "user_subtitle", "turnId", safeTurnId(turnId), "text", text));
+                        String turnId = sessionState.get().getTurnId();
+                        eventPublisher.publish(new UserTranscriptCompleteEvent(sessionId, safeTurnId(turnId), text));
                         if (memoryService != null) {
                             memoryService.saveMessage(sessionId, "user", text);
                         }
                         if (evaluationService != null) {
-                            evaluationService.evaluateTurn(turnId, sessionId, audioTurnBufferService, this, text);
-                            currentTurnId = null;
+                            evaluationService.evaluateTurn(turnId, sessionId, audioTurnBufferService, text);
+                            sessionState.updateAndGet(s -> s.withTurnId(null));
                         }
                     }
                 }
@@ -162,19 +179,19 @@ public class BailianRealtimeClient extends WebSocketClient implements RealtimeCh
 
     @Override
     public void onClose(int code, String reason, boolean remote) {
-        connected.set(false);
-        log.info("百炼连接已关闭, code={}, reason={}, remote={}", code, reason, remote);
+        sessionState.updateAndGet(s -> s.withStatus(SessionState.Status.CLOSED));
+        log.info("百炼连接已关闭, sessionId={}, state={}", sessionId, sessionState.get());
     }
 
     @Override
     public void onError(Exception ex) {
-        connected.set(false);
-        log.error("百炼错误", ex);
+        sessionState.updateAndGet(s -> s.withStatus(SessionState.Status.CLOSED));
+        log.error("百炼错误, sessionId={}, state={}", sessionId, sessionState.get(), ex);
     }
 
     @Override
     public boolean isConnected() {
-        return connected.get() && isOpen();
+        return sessionState.get().isActive() && isOpen();
     }
 
     @Override
@@ -188,8 +205,9 @@ public class BailianRealtimeClient extends WebSocketClient implements RealtimeCh
 
     @Override
     public void sendAudio(byte[] data) {
-        if (currentTurnId != null && !currentTurnId.isBlank()) {
-            audioTurnBufferService.appendAudio(currentTurnId, sessionId, data);
+        String turnId = sessionState.get().getTurnId();
+        if (turnId != null && !turnId.isBlank()) {
+            audioTurnBufferService.appendAudio(turnId, sessionId, data);
         }
 
         if (isOpen()) {
@@ -240,66 +258,18 @@ public class BailianRealtimeClient extends WebSocketClient implements RealtimeCh
 
     @Override
     public void clearCurrentTurn() {
-        this.currentTurnId = null;
+        sessionState.updateAndGet(s -> s.withTurnId(null));
     }
-
-    // ===== EvaluationResultPublisher 实现 =====
-
-    @Override
-    public void publishPronunciationResult(PronunciationResult result) {
-        try {
-            if (frontendSession.isOpen()) {
-                frontendSession.sendMessage(new TextMessage(objectMapper.writeValueAsString(Map.ofEntries(
-                        Map.entry("type", "pronunciation_score"),
-                        Map.entry("turnId", result.turnId() == null ? "" : result.turnId()),
-                        Map.entry("text", result.text()),
-                        Map.entry("suggestedScore", result.suggestedScore()),
-                        Map.entry("pronAccuracy", result.pronAccuracy()),
-                        Map.entry("pronFluency", result.pronFluency()),
-                        Map.entry("pronCompletion", result.pronCompletion()),
-                        Map.entry("suggestedGrade", result.suggestedGrade()),
-                        Map.entry("accuracyGrade", result.accuracyGrade()),
-                        Map.entry("fluencyGrade", result.fluencyGrade()),
-                        Map.entry("completionGrade", result.completionGrade())
-                ))));
-            }
-        } catch (Exception e) {
-            log.error("发送发音评分到前端失败", e);
-        }
-    }
-
-    @Override
-    public void publishGrammarCorrection(String turnId, String correctedText) {
-        try {
-            if (frontendSession.isOpen()) {
-                frontendSession.sendMessage(new TextMessage(objectMapper.writeValueAsString(Map.of(
-                        "type", "grammar_correction",
-                        "turnId", turnId == null ? "" : turnId,
-                        "text", correctedText
-                ))));
-            }
-        } catch (Exception e) {
-            log.error("发送语法纠正结果到前端失败", e);
-        }
-    }
-
-    // ===== 私有方法 =====
 
     private void handleSpeechStarted() {
-        if (currentTurnId == null || currentTurnId.isBlank()) {
-            currentTurnId = audioTurnBufferService.startTurn(sessionId);
-        }
-        log.info("检测到语音开始, sessionId={}, turnId={}", sessionId, currentTurnId);
-    }
-
-    private void sendToFrontend(Map<String, String> data) {
-        try {
-            if (frontendSession.isOpen()) {
-                frontendSession.sendMessage(new TextMessage(objectMapper.writeValueAsString(data)));
+        sessionState.updateAndGet(s -> {
+            if (s.getTurnId() == null || s.getTurnId().isBlank()) {
+                String newTurnId = audioTurnBufferService.startTurn(sessionId);
+                return s.withStatus(SessionState.Status.SPEAKING).withTurnId(newTurnId);
             }
-        } catch (Exception e) {
-            log.error("发送前端失败", e);
-        }
+            return s.withStatus(SessionState.Status.SPEAKING);
+        });
+        log.info("检测到语音开始, sessionId={}, state={}", sessionId, sessionState.get());
     }
 
     private String safeTurnId(String turnId) {
@@ -307,32 +277,35 @@ public class BailianRealtimeClient extends WebSocketClient implements RealtimeCh
     }
 
     /**
-     * BailianRealtimeClient 工厂实现
+     * 工厂实现
      */
     @Component
     public static class Factory implements RealtimeChatClientFactory {
         private final ConversationMemoryService memoryService;
         private final AudioTurnBufferService audioTurnBufferService;
         private final EvaluationService evaluationService;
+        private final DomainEventPublisher eventPublisher;
         private final BailianConfig bailianConfig;
 
         public Factory(ConversationMemoryService memoryService,
                        AudioTurnBufferService audioTurnBufferService,
                        EvaluationService evaluationService,
+                       DomainEventPublisher eventPublisher,
                        BailianConfig bailianConfig) {
             this.memoryService = memoryService;
             this.audioTurnBufferService = audioTurnBufferService;
             this.evaluationService = evaluationService;
+            this.eventPublisher = eventPublisher;
             this.bailianConfig = bailianConfig;
         }
 
         @Override
-        public RealtimeChatClient create(WebSocketSession frontendSession, String sessionId) {
+        public RealtimeChatClient create(String sessionId) {
             try {
                 return new BailianRealtimeClient(
-                        frontendSession, sessionId,
+                        sessionId,
                         memoryService, audioTurnBufferService,
-                        evaluationService, bailianConfig);
+                        evaluationService, eventPublisher, bailianConfig);
             } catch (Exception e) {
                 throw new RuntimeException("创建百炼客户端失败", e);
             }
