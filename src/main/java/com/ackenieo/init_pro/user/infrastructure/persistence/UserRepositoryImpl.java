@@ -40,4 +40,11 @@ public class UserRepositoryImpl implements UserRepository {
     public Optional<User> findById(String id) {
         return Optional.ofNullable(userMapper.selectById(id));
     }
+
+    @Override
+    public boolean existsByPhone(String phone) {
+        LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(User::getPhone, phone);
+        return userMapper.selectCount(wrapper) > 0;
+    }
 }

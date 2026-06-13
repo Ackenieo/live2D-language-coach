@@ -3,6 +3,8 @@ package com.ackenieo.init_pro.user.domain.entity;
 import com.ackenieo.init_pro.shared.domain.BaseEntity;
 import com.baomidou.mybatisplus.annotation.TableName;
 
+import java.math.BigDecimal;
+
 /**
  * 用户实体
  */
@@ -11,6 +13,8 @@ public class User extends BaseEntity {
     private String phone;
     private String password;
     private String nickname;
+    private String avatarUrl;
+    private BigDecimal totalScore;
 
     public User() {
     }
@@ -41,5 +45,21 @@ public class User extends BaseEntity {
 
     public void setNickname(String nickname) {
         this.nickname = nickname;
+    }
+
+    public String getAvatarUrl() {
+        return avatarUrl;
+    }
+
+    public void setAvatarUrl(String avatarUrl) {
+        this.avatarUrl = avatarUrl;
+    }
+
+    public BigDecimal getTotalScore() {
+        return totalScore;
+    }
+
+    public void setTotalScore(BigDecimal totalScore) {
+        this.totalScore = totalScore;
     }
 }

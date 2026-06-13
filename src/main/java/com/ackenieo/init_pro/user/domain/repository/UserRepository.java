@@ -11,4 +11,5 @@ public interface UserRepository {
     User save(User user);
     Optional<User> findByPhone(String phone);
     Optional<User> findById(String id);
+    boolean existsByPhone(String phone);
 }
