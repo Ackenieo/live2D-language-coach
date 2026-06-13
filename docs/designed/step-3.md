@@ -2,6 +2,7 @@
 
 > 目标：实现设计文档中剩余的后端 API（报告、历史、排行榜、用户资料）。
 > Phase 2 已补齐：数据库表、提示词模板、对话异步入库。
+> 2026-06-13 补丁：WS 生命周期管理（握手、config 落库、结束报告推送、心跳、重连）已完成。
 
 ---
 
@@ -17,12 +18,32 @@
 | `POST /api/chat/start` | ⏭️ | WebSocket 已覆盖，无需 REST |
 | `POST /api/chat/message` | ⏭️ | WebSocket 文字消息已支持 |
 | `POST /api/chat/voice` | ⏭️ | WebSocket 语音已支持 |
-| `POST /api/chat/end` | ⏭️ | WebSocket 关闭时自动结束 |
+| `POST /api/chat/end` | ✅ | WS 关闭时自动结束 + 推送 session_end 报告 |
 | `GET /api/chat/report/{sessionId}` | ❌ | 核心新需求 |
 | `GET /api/chat/history` | ❌ | 核心新需求 |
 | `GET /api/chat/current-score` | ⏭️ | 前端通过 WS 事件实时接收 |
 | `GET /api/leaderboard` | ❌ | 新需求 |
 | `GET /api/leaderboard/my-rank` | ❌ | 新需求 |
+
+---
+
+## WS 生命周期增强（2026-06-13 已完成）
+
+设计文档中缺失的 WS 连接生命周期管理已补齐，无需新增 REST 接口：
+
+| 能力 | 方向 | 消息 type | 说明 |
+|------|------|----------|------|
+| 连接握手 | S→C | `connected` / `reconnected` | 连接成功后下发 `sessionId`，前端持久化到 localStorage |
+| 配置同步 | S→C | `config_updated` | config 变更后落库 `t_chat_session` (scene/difficulty/accent) + 回执 |
+| 结束报告 | S→C | `session_end` | 对话结束时推送摘要（时长、轮数、总评、各维度评分、语法建议） |
+| 心跳 | C⇄S | `ping` / `pong` | 前端 15s 间隔发 ping，服务端回 pong |
+| 断线重连 | C→S | `reconnect` | 前端断线后带旧 sessionId 重连，服务端验证 DB 存在性后恢复 |
+| 重连失败 | S→C | `reconnect_failed` | session 不存在时通知前端创建新会话 |
+
+**涉及文件**：
+- `ChatWebSocketHandler.java` — afterConnectionEstablished 发 connected、handleTextMessage 处理 reconnect/ping、finishSession 推送 session_end
+- `ChatSessionService.java` — 新增 updateSessionConfig() 持久化场景/难度/口音
+- `fronttest/frontend/talktic/src/App.vue` — 接入新协议（connected/session_end/reconnect 处理、心跳定时器）
 
 ---
 

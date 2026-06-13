@@ -4,7 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.http.*;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
@@ -65,13 +65,12 @@ public class SmsService {
     private void sendSms(String phone, String code) {
         try {
             String url = smsUrl + "?name=" + productName + "&code=" + code + "&number=" + CODE_EXPIRE_MINUTES + "&to=" + phone;
-
-            HttpHeaders headers = new HttpHeaders();
-            HttpEntity<Void> request = new HttpEntity<>(headers);
-            ResponseEntity<String> response = restTemplate.postForEntity(url, request, String.class);
+            ResponseEntity<String> response = restTemplate.getForEntity(url, String.class);
 
             if (!response.getStatusCode().is2xxSuccessful()) {
                 log.warn("\u77ed\u4fe1\u53d1\u9001\u5931\u8d25: phone={}, status={}", phone, response.getStatusCode());
+            } else {
+                log.info("\u77ed\u4fe1\u53d1\u9001\u6210\u529f: phone={}, response={}", phone, response.getBody());
             }
         } catch (Exception e) {
             log.error("\u77ed\u4fe1\u53d1\u9001\u5f02\u5e38: phone={}", phone, e);

@@ -199,6 +199,20 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
         String sessionId = (String) session.getAttributes().get("sessionId");
         RealtimeChatClient client = clientMap.get(sessionId);
 
+        if (client != null && !client.isConnected()) {
+            // 百炼连接中断，尝试重连
+            log.warn("百炼连接已断开，尝试重连, sessionId={}", sessionId);
+            try { client.close(); } catch (Exception ignored) {}
+            client = clientFactory.create(sessionId);
+            clientMap.put(sessionId, client);
+            client.connect();
+            // 首次连接后等待 session.created 就绪，最多 8 秒
+            if (!client.waitReady()) {
+                log.warn("百炼重连未就绪，丢弃音频, sessionId={}", sessionId);
+                return;
+            }
+        }
+
         if (client != null && client.isConnected()) {
             ByteBuffer buffer = message.getPayload();
             byte[] audioData = new byte[buffer.remaining()];
