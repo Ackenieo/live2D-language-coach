@@ -1,5 +1,7 @@
 package com.ackenieo.init_pro.user.infrastructure.sms;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -22,6 +24,7 @@ public class SmsService {
 
     private final StringRedisTemplate redisTemplate;
     private final RestTemplate restTemplate;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Value("${app.sms.url}")
     private String smsUrl;
@@ -68,9 +71,18 @@ public class SmsService {
             ResponseEntity<String> response = restTemplate.getForEntity(url, String.class);
 
             if (!response.getStatusCode().is2xxSuccessful()) {
-                log.warn("\u77ed\u4fe1\u53d1\u9001\u5931\u8d25: phone={}, status={}", phone, response.getStatusCode());
+                log.warn("短信发送失败(HTTP): phone={}, status={}", phone, response.getStatusCode());
+                return;
+            }
+
+            String body = response.getBody();
+            JsonNode json = objectMapper.readTree(body);
+            int bizCode = json.get("code").asInt();
+
+            if (bizCode == 200 || bizCode == 0) {
+                log.info("短信发送成功: phone={}", phone);
             } else {
-                log.info("\u77ed\u4fe1\u53d1\u9001\u6210\u529f: phone={}, response={}", phone, response.getBody());
+                log.warn("短信发送失败(业务): phone={}, code={}, msg={}", phone, bizCode, json.get("msg").asText());
             }
         } catch (Exception e) {
             log.error("\u77ed\u4fe1\u53d1\u9001\u5f02\u5e38: phone={}", phone, e);
