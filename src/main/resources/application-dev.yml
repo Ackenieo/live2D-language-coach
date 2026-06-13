@@ -14,20 +14,14 @@ spring:
   data:
     redis:
       host: localhost
-      port: 6454
-      password:
+      port: 6379
+      password: Chenkun123
       database: 0
       timeout: 5000ms
-      lettuce:
-        pool:
-          max-active: 8
-          max-idle: 8
-          min-idle: 0
-          max-wait: -1ms
 
 mybatis-plus:
   mapper-locations: classpath*:/mapper/**/*.xml
-  type-aliases-package: com.ackenieo.init_pro.domain.model.entity
+  type-aliases-package: com.ackenieo.init_pro.user,com.ackenieo.init_pro.conversation
   configuration:
     map-underscore-to-camel-case: true
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
@@ -46,3 +40,29 @@ app:
   sms:
     url: https://push.spug.cc/sms/d_C0w7AnQGqO1S8SmyEwZA
     product-name: Live2DLanguageCoach
+
+bailian:
+  api-key: sk-268b7bc8cf3142a4bc34a0396e90d275
+  ws-url: wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen-omni-turbo-realtime
+  voice: Chelsie
+
+live2d-coach:
+  memory:
+    max-messages: 20
+    ttl-hours: 24
+    key-prefix: "live2d-coach:memory:"
+
+tencent:
+  soe:
+    enabled: true
+    app-id: 1440321518
+    secret-id: AKID3ITXTI5kDVq11pQr6991vnW4Rr6BIPQM
+    secret-key: nRxXvDOabP4Zu31pTuCKKBsRq7DjIsIW
+
+doubao:
+  enabled: true
+  api-key: 209feb72-2c0d-49a2-b843-da308b2befc3
+  base-url: https://ark.cn-beijing.volces.com/api/v3
+  chat-model: doubao-seed-1-6
+  correction-model: doubao-seed-1-6
+  timeout-millis: 30000

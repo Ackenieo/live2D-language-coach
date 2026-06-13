@@ -38,3 +38,5 @@ CLAUDE.md
 .claude/
 script_home/
 skills/
+openspec/
+fronttest/
