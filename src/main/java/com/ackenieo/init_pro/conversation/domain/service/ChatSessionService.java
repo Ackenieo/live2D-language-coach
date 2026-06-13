@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
 import java.util.Optional;
 
 /**
@@ -37,6 +38,20 @@ public class ChatSessionService {
         return saved;
     }
 
+    public ChatSession updateSessionConfig(String sessionId, String scene, String difficulty, String accent) {
+        Optional<ChatSession> opt = chatSessionRepository.findById(sessionId);
+        if (opt.isEmpty()) {
+            log.warn("更新会话配置失败, 会话不存在: {}", sessionId);
+            return null;
+        }
+        ChatSession session = opt.get();
+        session.setScene(scene);
+        session.setDifficulty(difficulty);
+        session.setAccent(accent);
+        session.markUpdated();
+        return chatSessionRepository.save(session);
+    }
+
     public ChatSession endSession(String sessionId, String totalGrade) {
         Optional<ChatSession> opt = chatSessionRepository.findById(sessionId);
         if (opt.isEmpty()) {
@@ -44,8 +59,9 @@ public class ChatSessionService {
             return null;
         }
         ChatSession session = opt.get();
-        session.setEndedAt(java.time.LocalDateTime.now());
+        session.setEndedAt(LocalDateTime.now());
         session.setTotalGrade(totalGrade);
+        session.markUpdated();
         return chatSessionRepository.save(session);
     }
 

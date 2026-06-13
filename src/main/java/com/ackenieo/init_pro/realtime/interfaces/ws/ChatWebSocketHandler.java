@@ -21,12 +21,19 @@ import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.CloseStatus;
+import org.springframework.web.socket.PingMessage;
+import org.springframework.web.socket.PongMessage;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.AbstractWebSocketHandler;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -40,11 +47,10 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
     private static final Logger log = LoggerFactory.getLogger(ChatWebSocketHandler.class);
     private static final ObjectMapper objectMapper = new ObjectMapper();
 
-    /** sessionId → RealtimeChatClient */
     private final Map<String, RealtimeChatClient> clientMap = new ConcurrentHashMap<>();
-    /** sessionId → 前端 WebSocketSession */
     private final Map<String, WebSocketSession> sessionMap = new ConcurrentHashMap<>();
     private final Map<String, Boolean> visionEnabledMap = new ConcurrentHashMap<>();
+    private final Map<String, SessionMetrics> metricsMap = new ConcurrentHashMap<>();
     private final ConversationMemoryService memoryService;
     private final RealtimeChatClientFactory clientFactory;
     private final PromptTemplateService promptTemplateService;
@@ -59,8 +65,6 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
         this.promptTemplateService = promptTemplateService;
         this.chatSessionService = chatSessionService;
     }
-
-    // ===== 领域事件监听 → 转发前端 =====
 
     @EventListener
     public void onAiAudioDelta(AiAudioDeltaEvent event) {
@@ -86,6 +90,8 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
 
     @EventListener
     public void onUserTranscriptComplete(UserTranscriptCompleteEvent event) {
+        SessionMetrics metrics = metricsMap.computeIfAbsent(event.getSessionId(), ignored -> new SessionMetrics());
+        metrics.userTurnCount++;
         sendTextToFrontend(event.getSessionId(), Map.of(
                 "type", "user_subtitle",
                 "turnId", event.getTurnId(),
@@ -96,6 +102,11 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
     @EventListener
     public void onPronunciationEvaluated(PronunciationEvaluatedEvent event) {
         PronunciationResult r = event.getResult();
+        SessionMetrics metrics = metricsMap.computeIfAbsent(r.sessionId(), ignored -> new SessionMetrics());
+        metrics.lastSuggestedGrade = blankToDefault(r.suggestedGrade(), "-");
+        metrics.accuracyGrade = blankToDefault(r.accuracyGrade(), "-");
+        metrics.fluencyGrade = blankToDefault(r.fluencyGrade(), "-");
+        metrics.completionGrade = blankToDefault(r.completionGrade(), "-");
         sendTextToFrontend(r.sessionId(), Map.ofEntries(
                 Map.entry("type", "pronunciation_score"),
                 Map.entry("turnId", r.turnId() == null ? "" : r.turnId()),
@@ -113,6 +124,10 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
 
     @EventListener
     public void onGrammarCorrected(GrammarCorrectedEvent event) {
+        SessionMetrics metrics = metricsMap.computeIfAbsent(event.getSessionId(), ignored -> new SessionMetrics());
+        if (event.getCorrectedText() != null && !event.getCorrectedText().isBlank()) {
+            metrics.grammarCorrections.add(event.getCorrectedText());
+        }
         sendTextToFrontend(event.getSessionId(), Map.of(
                 "type", "grammar_correction",
                 "turnId", event.getTurnId() == null ? "" : event.getTurnId(),
@@ -120,28 +135,49 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
         ));
     }
 
-    // ===== WebSocket 生命周期 =====
-
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
-        String sessionId = UUID.randomUUID().toString();
-        session.getAttributes().put("sessionId", sessionId);
-        sessionMap.put(sessionId, session);
-        log.info("前端WebSocket连接已建立, sessionId={}", sessionId);
+        String requestedSessionId = getQueryParam(session, "sessionId");
+        String reconnectSessionId = getQueryParam(session, "reconnectSessionId");
+        String sessionId = firstNonBlank(reconnectSessionId, requestedSessionId);
+        boolean reconnect = sessionId != null && chatSessionService.findById(sessionId).isPresent();
 
-        // 异步入库：创建会话记录
-        String userId = (String) session.getAttributes().get("userId");
-        if (userId != null) {
+        if (!reconnect) {
+            sessionId = UUID.randomUUID().toString();
+            String userId = (String) session.getAttributes().get("userId");
+            if (userId != null) {
+                try {
+                    chatSessionService.startSession(userId, "default", "medium", "us", sessionId);
+                } catch (Exception e) {
+                    log.error("创建会话记录失败, sessionId={}", sessionId, e);
+                }
+            }
+            metricsMap.put(sessionId, new SessionMetrics());
+        } else {
+            metricsMap.computeIfAbsent(sessionId, ignored -> new SessionMetrics());
+        }
+
+        session.getAttributes().put("sessionId", sessionId);
+        WebSocketSession oldSession = sessionMap.put(sessionId, session);
+        if (oldSession != null && oldSession.isOpen() && oldSession != session) {
             try {
-                chatSessionService.startSession(userId, "default", "medium", "us", sessionId);
-            } catch (Exception e) {
-                log.error("创建会话记录失败, sessionId={}", sessionId, e);
+                oldSession.close(CloseStatus.SESSION_NOT_RELIABLE);
+            } catch (IOException e) {
+                log.warn("关闭旧连接失败, sessionId={}", sessionId, e);
             }
         }
 
-        RealtimeChatClient client = clientFactory.create(sessionId);
+        RealtimeChatClient client = reconnect ? getOrCreateClient(session) : clientFactory.create(sessionId);
         clientMap.put(sessionId, client);
-        client.connect();
+        if (!client.isConnected()) {
+            client.connect();
+        }
+
+        log.info("前端WebSocket连接已建立, sessionId={}, reconnect={}", sessionId, reconnect);
+        sendLifecycleMessage(sessionId, reconnect ? "reconnected" : "connected", Map.of(
+                "sessionId", sessionId,
+                "reconnect", reconnect
+        ));
     }
 
     private RealtimeChatClient getOrCreateClient(WebSocketSession session) throws Exception {
@@ -205,50 +241,116 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
                         }
                     }
                 }
-                case "config" -> {
-                    if (json.has("vision")) {
-                        String vision = json.get("vision").asText();
-                        boolean hasVision = "on".equalsIgnoreCase(vision);
-                        visionEnabledMap.put(sessionId, hasVision);
-                        log.info("视觉状态变更, sessionId={}, vision={}", sessionId, vision);
-                    }
-
-                    String instructions;
-                    if (json.has("lang") || json.has("role")) {
-                        String lang = json.has("lang") ? json.get("lang").asText() : "en";
-                        String role = json.has("role") ? json.get("role").asText() : "English Coach";
-                        boolean hasVision = visionEnabledMap.getOrDefault(sessionId, false);
-                        instructions = buildInstructions(lang, role, hasVision);
-                        log.info("收到配置更新(前端格式), sessionId={}, lang={}, role={}, vision={}", sessionId, lang, role, hasVision);
-                    } else {
-                        String scene = json.has("scene") ? json.get("scene").asText() : "default";
-                        String difficulty = json.has("difficulty") ? json.get("difficulty").asText() : "medium";
-                        String accent = json.has("accent") ? json.get("accent").asText() : "us";
-                        instructions = promptTemplateService.getSystemPrompt(scene, Map.of(
-                                "difficulty", difficulty,
-                                "accent", accent
-                        ));
-                        log.info("收到配置更新(扩展格式), sessionId={}, scene={}, difficulty={}, accent={}", sessionId, scene, difficulty, accent);
-                    }
-                    RealtimeChatClient ensuredClient = getOrCreateClient(session);
-                    ensuredClient.setInstructions(instructions);
-                }
+                case "config" -> handleConfigMessage(session, json, sessionId)
+                ;
                 case "start" -> {
                     RealtimeChatClient ensuredClient = getOrCreateClient(session);
                     log.info("开始通话, connected={}", ensuredClient.isConnected());
                 }
-                case "finish" -> {
-                    if (client != null) client.close();
-                }
+                case "finish" -> finishSession(sessionId, true);
+                case "reconnect" -> handleReconnectMessage(session, json);
+                case "ping" -> session.sendMessage(new PongMessage());
+                default -> log.debug("忽略未知消息类型, sessionId={}, type={}", sessionId, type);
             }
         } catch (Exception e) {
             log.warn("解析消息失败", e);
         }
     }
 
+    private void handleConfigMessage(WebSocketSession session, JsonNode json, String sessionId) throws Exception {
+        if (json.has("vision")) {
+            String vision = json.get("vision").asText();
+            boolean hasVision = "on".equalsIgnoreCase(vision);
+            visionEnabledMap.put(sessionId, hasVision);
+            log.info("视觉状态变更, sessionId={}, vision={}", sessionId, vision);
+        }
+
+        String scene = json.has("scene") ? json.get("scene").asText() : "default";
+        String difficulty = json.has("difficulty") ? json.get("difficulty").asText() : "medium";
+        String accent = json.has("accent") ? json.get("accent").asText() : "us";
+        String instructions;
+        if (json.has("lang") || json.has("role")) {
+            String lang = json.has("lang") ? json.get("lang").asText() : "en";
+            String role = json.has("role") ? json.get("role").asText() : "English Coach";
+            boolean hasVision = visionEnabledMap.getOrDefault(sessionId, false);
+            instructions = buildInstructions(lang, role, hasVision);
+            log.info("收到配置更新(前端格式), sessionId={}, lang={}, role={}, vision={}", sessionId, lang, role, hasVision);
+        } else {
+            instructions = promptTemplateService.getSystemPrompt(scene, Map.of(
+                    "difficulty", difficulty,
+                    "accent", accent
+            ));
+            log.info("收到配置更新(扩展格式), sessionId={}, scene={}, difficulty={}, accent={}", sessionId, scene, difficulty, accent);
+        }
+
+        chatSessionService.updateSessionConfig(sessionId, scene, difficulty, accent);
+        RealtimeChatClient ensuredClient = getOrCreateClient(session);
+        ensuredClient.setInstructions(instructions);
+        sendLifecycleMessage(sessionId, "config_updated", Map.of(
+                "sessionId", sessionId,
+                "scene", scene,
+                "difficulty", difficulty,
+                "accent", accent,
+                "vision", visionEnabledMap.getOrDefault(sessionId, false)
+        ));
+    }
+
+    private void handleReconnectMessage(WebSocketSession session, JsonNode json) throws Exception {
+        String requestedSessionId = json.has("sessionId") ? json.get("sessionId").asText() : "";
+        if (requestedSessionId.isBlank() || chatSessionService.findById(requestedSessionId).isEmpty()) {
+            sendLifecycleMessage((String) session.getAttributes().get("sessionId"), "reconnect_failed", Map.of(
+                    "reason", "session_not_found"
+            ));
+            return;
+        }
+
+        String currentSessionId = (String) session.getAttributes().get("sessionId");
+        if (currentSessionId != null && !currentSessionId.equals(requestedSessionId)) {
+            sessionMap.remove(currentSessionId, session);
+            visionEnabledMap.remove(currentSessionId);
+        }
+
+        session.getAttributes().put("sessionId", requestedSessionId);
+        sessionMap.put(requestedSessionId, session);
+        metricsMap.computeIfAbsent(requestedSessionId, ignored -> new SessionMetrics());
+        RealtimeChatClient client = getOrCreateClient(session);
+        clientMap.put(requestedSessionId, client);
+        sendLifecycleMessage(requestedSessionId, "reconnected", Map.of(
+                "sessionId", requestedSessionId,
+                "reconnect", true
+        ));
+    }
+
+    @Override
+    protected void handlePongMessage(WebSocketSession session, PongMessage message) {
+        String sessionId = (String) session.getAttributes().get("sessionId");
+        sendLifecycleMessage(sessionId, "pong", Map.of("sessionId", sessionId));
+    }
+
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
-        String sessionId = (String) session.getAttributes().get("sessionId");
+        finishSession((String) session.getAttributes().get("sessionId"), false);
+    }
+
+    private void finishSession(String sessionId, boolean closeSocket) throws Exception {
+        if (sessionId == null || sessionId.isBlank()) {
+            return;
+        }
+
+        WebSocketSession socket = sessionMap.get(sessionId);
+        ChatSession endedSession = null;
+        try {
+            endedSession = chatSessionService.endSession(sessionId, metricsMap.getOrDefault(sessionId, new SessionMetrics()).lastSuggestedGrade);
+        } catch (Exception e) {
+            log.error("结束会话记录失败, sessionId={}", sessionId, e);
+        }
+
+        sendSessionEnd(sessionId, endedSession);
+
+        if (closeSocket && socket != null && socket.isOpen()) {
+            socket.close(CloseStatus.NORMAL);
+        }
+
         sessionMap.remove(sessionId);
         visionEnabledMap.remove(sessionId);
         RealtimeChatClient client = clientMap.remove(sessionId);
@@ -256,22 +358,36 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
             client.clearCurrentTurn();
             client.close();
         }
-        // 结束会话记录
-        try {
-            chatSessionService.endSession(sessionId, null);
-        } catch (Exception e) {
-            log.error("结束会话记录失败, sessionId={}", sessionId, e);
-        }
+        metricsMap.remove(sessionId);
         log.info("前端WebSocket连接已关闭, sessionId={}", sessionId);
+    }
+
+    private void sendSessionEnd(String sessionId, ChatSession chatSession) {
+        SessionMetrics metrics = metricsMap.getOrDefault(sessionId, new SessionMetrics());
+        long durationSeconds = 0L;
+        if (chatSession != null && chatSession.getCreatedAt() != null) {
+            LocalDateTime endedAt = chatSession.getEndedAt() != null ? chatSession.getEndedAt() : LocalDateTime.now();
+            durationSeconds = Math.max(Duration.between(chatSession.getCreatedAt(), endedAt).getSeconds(), 0L);
+        }
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("type", "session_end");
+        payload.put("sessionId", sessionId);
+        payload.put("durationSeconds", durationSeconds);
+        payload.put("turnCount", metrics.userTurnCount);
+        payload.put("overallGrade", blankToDefault(metrics.lastSuggestedGrade, "-"));
+        payload.put("accuracyGrade", blankToDefault(metrics.accuracyGrade, "-"));
+        payload.put("fluencyGrade", blankToDefault(metrics.fluencyGrade, "-"));
+        payload.put("completionGrade", blankToDefault(metrics.completionGrade, "-"));
+        payload.put("summary", buildSummary(durationSeconds, metrics));
+        payload.put("suggestions", metrics.grammarCorrections.stream().limit(5).toList());
+        sendRawTextToFrontend(sessionId, payload);
     }
 
     @Override
     public void handleTransportError(WebSocketSession session, Throwable exception) throws Exception {
         log.error("WebSocket传输错误", exception);
-        afterConnectionClosed(session, CloseStatus.SERVER_ERROR);
+        finishSession((String) session.getAttributes().get("sessionId"), false);
     }
-
-    // ===== 私有方法 =====
 
     private void sendTextToFrontend(String sessionId, Map<String, String> data) {
         WebSocketSession session = sessionMap.get(sessionId);
@@ -282,6 +398,57 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
                 log.error("发送前端失败, sessionId={}", sessionId, e);
             }
         }
+    }
+
+    private void sendLifecycleMessage(String sessionId, String type, Map<String, ?> extra) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("type", type);
+        data.putAll(extra);
+        sendRawTextToFrontend(sessionId, data);
+    }
+
+    private void sendRawTextToFrontend(String sessionId, Map<String, ?> data) {
+        WebSocketSession session = sessionMap.get(sessionId);
+        if (session != null && session.isOpen()) {
+            try {
+                session.sendMessage(new TextMessage(objectMapper.writeValueAsString(data)));
+            } catch (IOException e) {
+                log.error("发送前端失败, sessionId={}", sessionId, e);
+            }
+        }
+    }
+
+    private static String buildSummary(long durationSeconds, SessionMetrics metrics) {
+        long minutes = durationSeconds / 60;
+        long seconds = durationSeconds % 60;
+        return String.format("本次对话 %02d:%02d，共 %d 轮，总评 %s。", minutes, seconds, metrics.userTurnCount, blankToDefault(metrics.lastSuggestedGrade, "-"));
+    }
+
+    private static String blankToDefault(String value, String defaultValue) {
+        return value == null || value.isBlank() ? defaultValue : value;
+    }
+
+    private static String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private static String getQueryParam(WebSocketSession session, String key) {
+        if (session.getUri() == null || session.getUri().getQuery() == null) {
+            return null;
+        }
+        String[] pairs = session.getUri().getQuery().split("&");
+        for (String pair : pairs) {
+            String[] entry = pair.split("=", 2);
+            if (entry.length == 2 && key.equals(entry[0])) {
+                return entry[1];
+            }
+        }
+        return null;
     }
 
     static String buildInstructions(String lang, String role, boolean hasVision) {
@@ -295,5 +462,14 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
             return "You are " + role + ", the screenshot is what you see with your eyes. Answer concisely and correct the user's English when appropriate.";
         }
         return "You are " + role + ". Answer concisely and correct the user's English when appropriate.";
+    }
+
+    private static final class SessionMetrics {
+        private int userTurnCount;
+        private String lastSuggestedGrade = "-";
+        private String accuracyGrade = "-";
+        private String fluencyGrade = "-";
+        private String completionGrade = "-";
+        private final List<String> grammarCorrections = new ArrayList<>();
     }
 }
