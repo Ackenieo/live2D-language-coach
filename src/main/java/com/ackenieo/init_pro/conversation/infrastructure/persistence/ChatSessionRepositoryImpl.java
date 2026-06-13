@@ -41,6 +41,11 @@ public class ChatSessionRepositoryImpl implements ChatSessionRepository {
     }
 
     @Override
+    public List<ChatSession> findAllEndedSessions(int offset, int limit) {
+        return chatSessionMapper.selectAllEndedSessions(offset, limit);
+    }
+
+    @Override
     public long countEndedSessionsByUserId(String userId) {
         LambdaQueryWrapper<ChatSession> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(ChatSession::getUserId, userId)

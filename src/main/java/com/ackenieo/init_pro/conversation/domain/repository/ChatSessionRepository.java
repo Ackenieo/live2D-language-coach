@@ -12,5 +12,6 @@ public interface ChatSessionRepository {
     ChatSession save(ChatSession session);
     Optional<ChatSession> findById(String id);
     List<ChatSession> findEndedSessionsByUserId(String userId, int offset, int limit);
+    List<ChatSession> findAllEndedSessions(int offset, int limit);
     long countEndedSessionsByUserId(String userId);
 }

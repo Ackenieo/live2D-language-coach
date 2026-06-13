@@ -26,4 +26,15 @@ public interface ChatSessionMapper extends BaseMapper<ChatSession> {
     List<ChatSession> selectEndedSessionsByUserId(@Param("userId") String userId,
                                                   @Param("offset") int offset,
                                                   @Param("limit") int limit);
+
+    @Select("""
+            SELECT *
+            FROM t_chat_session
+            WHERE ended_at IS NOT NULL
+              AND deleted = 0
+            ORDER BY created_at DESC
+            LIMIT #{limit} OFFSET #{offset}
+            """)
+    List<ChatSession> selectAllEndedSessions(@Param("offset") int offset,
+                                             @Param("limit") int limit);
 }

@@ -1,5 +1,6 @@
 package com.ackenieo.init_pro.realtime.interfaces.ws;
 
+import com.ackenieo.init_pro.conversation.application.service.SessionFinalizeAppService;
 import com.ackenieo.init_pro.conversation.domain.entity.ChatSession;
 import com.ackenieo.init_pro.conversation.domain.service.ChatSessionService;
 import com.ackenieo.init_pro.conversation.domain.service.ConversationMemoryService;
@@ -55,15 +56,18 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
     private final RealtimeChatClientFactory clientFactory;
     private final PromptTemplateService promptTemplateService;
     private final ChatSessionService chatSessionService;
+    private final SessionFinalizeAppService sessionFinalizeAppService;
 
     public ChatWebSocketHandler(ConversationMemoryService memoryService,
                                 RealtimeChatClientFactory clientFactory,
                                 PromptTemplateService promptTemplateService,
-                                ChatSessionService chatSessionService) {
+                                ChatSessionService chatSessionService,
+                                SessionFinalizeAppService sessionFinalizeAppService) {
         this.memoryService = memoryService;
         this.clientFactory = clientFactory;
         this.promptTemplateService = promptTemplateService;
         this.chatSessionService = chatSessionService;
+        this.sessionFinalizeAppService = sessionFinalizeAppService;
     }
 
     @EventListener
@@ -200,13 +204,11 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
         RealtimeChatClient client = clientMap.get(sessionId);
 
         if (client != null && !client.isConnected()) {
-            // 百炼连接中断，尝试重连
             log.warn("百炼连接已断开，尝试重连, sessionId={}", sessionId);
             try { client.close(); } catch (Exception ignored) {}
             client = clientFactory.create(sessionId);
             clientMap.put(sessionId, client);
             client.connect();
-            // 首次连接后等待 session.created 就绪，最多 8 秒
             if (!client.waitReady()) {
                 log.warn("百炼重连未就绪，丢弃音频, sessionId={}", sessionId);
                 return;
@@ -255,8 +257,7 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
                         }
                     }
                 }
-                case "config" -> handleConfigMessage(session, json, sessionId)
-                ;
+                case "config" -> handleConfigMessage(session, json, sessionId);
                 case "start" -> {
                     RealtimeChatClient ensuredClient = getOrCreateClient(session);
                     log.info("开始通话, connected={}", ensuredClient.isConnected());
@@ -352,14 +353,15 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
         }
 
         WebSocketSession socket = sessionMap.get(sessionId);
-        ChatSession endedSession = null;
+        SessionMetrics metrics = metricsMap.getOrDefault(sessionId, new SessionMetrics());
+        SessionFinalizeAppService.SessionFinalizeResult finalizeResult = null;
         try {
-            endedSession = chatSessionService.endSession(sessionId, metricsMap.getOrDefault(sessionId, new SessionMetrics()).lastSuggestedGrade);
+            finalizeResult = sessionFinalizeAppService.finalizeSession(sessionId, metrics.grammarCorrections);
         } catch (Exception e) {
             log.error("结束会话记录失败, sessionId={}", sessionId, e);
         }
 
-        sendSessionEnd(sessionId, endedSession);
+        sendSessionEnd(sessionId, finalizeResult, metrics);
 
         if (closeSocket && socket != null && socket.isOpen()) {
             socket.close(CloseStatus.NORMAL);
@@ -376,24 +378,23 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
         log.info("前端WebSocket连接已关闭, sessionId={}", sessionId);
     }
 
-    private void sendSessionEnd(String sessionId, ChatSession chatSession) {
-        SessionMetrics metrics = metricsMap.getOrDefault(sessionId, new SessionMetrics());
-        long durationSeconds = 0L;
-        if (chatSession != null && chatSession.getCreatedAt() != null) {
-            LocalDateTime endedAt = chatSession.getEndedAt() != null ? chatSession.getEndedAt() : LocalDateTime.now();
-            durationSeconds = Math.max(Duration.between(chatSession.getCreatedAt(), endedAt).getSeconds(), 0L);
-        }
+    private void sendSessionEnd(String sessionId,
+                                SessionFinalizeAppService.SessionFinalizeResult finalizeResult,
+                                SessionMetrics metrics) {
+        long durationSeconds = finalizeResult == null ? 0L : finalizeResult.durationSeconds();
         Map<String, Object> payload = new HashMap<>();
         payload.put("type", "session_end");
         payload.put("sessionId", sessionId);
         payload.put("durationSeconds", durationSeconds);
-        payload.put("turnCount", metrics.userTurnCount);
-        payload.put("overallGrade", blankToDefault(metrics.lastSuggestedGrade, "-"));
-        payload.put("accuracyGrade", blankToDefault(metrics.accuracyGrade, "-"));
-        payload.put("fluencyGrade", blankToDefault(metrics.fluencyGrade, "-"));
-        payload.put("completionGrade", blankToDefault(metrics.completionGrade, "-"));
+        payload.put("turnCount", finalizeResult == null ? metrics.userTurnCount : finalizeResult.messageCount());
+        payload.put("overallGrade", finalizeResult == null ? blankToDefault(metrics.lastSuggestedGrade, "-") : finalizeResult.overallGrade());
+        payload.put("accuracyGrade", finalizeResult == null ? blankToDefault(metrics.accuracyGrade, "-") : finalizeResult.accuracyGrade());
+        payload.put("fluencyGrade", finalizeResult == null ? blankToDefault(metrics.fluencyGrade, "-") : finalizeResult.fluencyGrade());
+        payload.put("completionGrade", finalizeResult == null ? blankToDefault(metrics.completionGrade, "-") : finalizeResult.completenessGrade());
         payload.put("summary", buildSummary(durationSeconds, metrics));
-        payload.put("suggestions", metrics.grammarCorrections.stream().limit(5).toList());
+        payload.put("suggestions", finalizeResult == null
+                ? metrics.grammarCorrections.stream().limit(5).toList()
+                : splitSuggestions(finalizeResult.suggestion()));
         sendRawTextToFrontend(sessionId, payload);
     }
 
@@ -436,6 +437,20 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
         long minutes = durationSeconds / 60;
         long seconds = durationSeconds % 60;
         return String.format("本次对话 %02d:%02d，共 %d 轮，总评 %s。", minutes, seconds, metrics.userTurnCount, blankToDefault(metrics.lastSuggestedGrade, "-"));
+    }
+
+    private List<String> splitSuggestions(String suggestion) {
+        if (suggestion == null || suggestion.isBlank()) {
+            return List.of();
+        }
+        List<String> items = new ArrayList<>();
+        for (String line : suggestion.replace("\r", "").split("\n")) {
+            String trimmed = line.trim();
+            if (!trimmed.isEmpty()) {
+                items.add(trimmed);
+            }
+        }
+        return items;
     }
 
     private static String blankToDefault(String value, String defaultValue) {
