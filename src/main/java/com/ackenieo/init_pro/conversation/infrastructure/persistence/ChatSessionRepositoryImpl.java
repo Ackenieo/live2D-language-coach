@@ -2,8 +2,10 @@ package com.ackenieo.init_pro.conversation.infrastructure.persistence;
 
 import com.ackenieo.init_pro.conversation.domain.entity.ChatSession;
 import com.ackenieo.init_pro.conversation.domain.repository.ChatSessionRepository;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -31,5 +33,18 @@ public class ChatSessionRepositoryImpl implements ChatSessionRepository {
     @Override
     public Optional<ChatSession> findById(String id) {
         return Optional.ofNullable(chatSessionMapper.selectById(id));
+    }
+
+    @Override
+    public List<ChatSession> findEndedSessionsByUserId(String userId, int offset, int limit) {
+        return chatSessionMapper.selectEndedSessionsByUserId(userId, offset, limit);
+    }
+
+    @Override
+    public long countEndedSessionsByUserId(String userId) {
+        LambdaQueryWrapper<ChatSession> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(ChatSession::getUserId, userId)
+                .isNotNull(ChatSession::getEndedAt);
+        return chatSessionMapper.selectCount(wrapper);
     }
 }
