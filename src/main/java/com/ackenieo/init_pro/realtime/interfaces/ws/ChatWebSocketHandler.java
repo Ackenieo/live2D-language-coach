@@ -3,7 +3,6 @@ package com.ackenieo.init_pro.realtime.interfaces.ws;
 import com.ackenieo.init_pro.conversation.application.service.SessionFinalizeAppService;
 import com.ackenieo.init_pro.conversation.domain.entity.ChatSession;
 import com.ackenieo.init_pro.conversation.domain.service.ChatSessionService;
-import com.ackenieo.init_pro.conversation.domain.service.ConversationMemoryService;
 import com.ackenieo.init_pro.conversation.domain.service.PromptTemplateService;
 import com.ackenieo.init_pro.evaluation.domain.entity.PronunciationResult;
 import com.ackenieo.init_pro.evaluation.domain.event.GrammarCorrectedEvent;
@@ -38,6 +37,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -55,18 +55,16 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
     private final Map<String, Boolean> visionEnabledMap = new ConcurrentHashMap<>();
     private final Map<String, FrontendImageQueue> imageQueueMap = new ConcurrentHashMap<>();
     private final Map<String, SessionMetrics> metricsMap = new ConcurrentHashMap<>();
-    private final ConversationMemoryService memoryService;
+    private final Set<String> imageSentForCurrentTurn = ConcurrentHashMap.newKeySet();
     private final RealtimeChatClientFactory clientFactory;
     private final PromptTemplateService promptTemplateService;
     private final ChatSessionService chatSessionService;
     private final SessionFinalizeAppService sessionFinalizeAppService;
 
-    public ChatWebSocketHandler(ConversationMemoryService memoryService,
-                                RealtimeChatClientFactory clientFactory,
+    public ChatWebSocketHandler(RealtimeChatClientFactory clientFactory,
                                 PromptTemplateService promptTemplateService,
                                 ChatSessionService chatSessionService,
                                 SessionFinalizeAppService sessionFinalizeAppService) {
-        this.memoryService = memoryService;
         this.clientFactory = clientFactory;
         this.promptTemplateService = promptTemplateService;
         this.chatSessionService = chatSessionService;
@@ -104,7 +102,7 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
                 "turnId", event.getTurnId(),
                 "text", event.getText()
         ));
-        sendTailImageForVisualIntent(event.getSessionId(), event.getText());
+        imageSentForCurrentTurn.remove(event.getSessionId());
     }
 
     @EventListener
@@ -162,9 +160,11 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
             }
             metricsMap.put(sessionId, new SessionMetrics());
             imageQueueMap.put(sessionId, new FrontendImageQueue());
+            imageSentForCurrentTurn.remove(sessionId);
         } else {
             metricsMap.computeIfAbsent(sessionId, ignored -> new SessionMetrics());
             imageQueueMap.computeIfAbsent(sessionId, ignored -> new FrontendImageQueue());
+            imageSentForCurrentTurn.remove(sessionId);
         }
 
         session.getAttributes().put("sessionId", sessionId);
@@ -225,6 +225,7 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
             ByteBuffer buffer = message.getPayload();
             byte[] audioData = new byte[buffer.remaining()];
             buffer.get(audioData);
+            sendQueuedImageOnceForCurrentTurn(sessionId, client);
             client.sendAudio(audioData);
             log.debug("音频数据到达, sessionId={}, bytes={}", sessionId, audioData.length);
         } else {
@@ -245,7 +246,9 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
             switch (type) {
                 case "text" -> {
                     if (client != null && client.isConnected()) {
+                        sendQueuedImageOnceForCurrentTurn(sessionId, client);
                         client.sendText(json.has("text") ? json.get("text").asText() : "");
+                        imageSentForCurrentTurn.remove(sessionId);
                     }
                 }
                 case "screenshot" -> handleScreenshotMessage(sessionId, json);
@@ -276,26 +279,25 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
         log.info("前端图片已入队, sessionId={}, queueSize={}", sessionId, imageQueue.size());
     }
 
-    private void sendTailImageForVisualIntent(String sessionId, String userText) {
-        if (!memoryService.hasVisualKeyword(userText)) {
+    private void sendQueuedImageOnceForCurrentTurn(String sessionId, RealtimeChatClient client) {
+        if (!visionEnabledMap.getOrDefault(sessionId, false)) {
             return;
         }
-
-        RealtimeChatClient client = clientMap.get(sessionId);
-        if (client == null || !client.isConnected()) {
-            log.info("Visual intent detected but realtime client is not connected, sessionId={}", sessionId);
+        if (imageSentForCurrentTurn.contains(sessionId)) {
             return;
         }
 
         FrontendImageQueue imageQueue = imageQueueMap.get(sessionId);
         FrontendImage imageToSend = imageQueue == null ? null : imageQueue.tail();
         if (imageToSend == null) {
-            log.info("Visual intent detected but image queue is empty, sessionId={}", sessionId);
+            log.debug("视觉已开启但图片队列为空, sessionId={}", sessionId);
             return;
         }
 
-        client.sendImage(imageToSend.base64Image(), imageToSend.prompt());
-        log.info("Sent queued tail image for visual intent, sessionId={}", sessionId);
+        if (client.sendImage(imageToSend.base64Image())) {
+            imageSentForCurrentTurn.add(sessionId);
+            log.info("已在当前用户轮次发送最新图片, sessionId={}", sessionId);
+        }
     }
 
 
@@ -315,20 +317,10 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
         String scene = json.has("scene") ? json.get("scene").asText() : "default";
         String difficulty = json.has("difficulty") ? json.get("difficulty").asText() : "medium";
         String accent = json.has("accent") ? json.get("accent").asText() : "us";
-        String instructions;
-        if (json.has("lang") || json.has("role")) {
-            String lang = json.has("lang") ? json.get("lang").asText() : "en";
-            String role = json.has("role") ? json.get("role").asText() : "English Coach";
-            boolean hasVision = visionEnabledMap.getOrDefault(sessionId, false);
-            instructions = buildInstructions(lang, role, hasVision);
-            log.info("收到配置更新(前端格式), sessionId={}, lang={}, role={}, vision={}", sessionId, lang, role, hasVision);
-        } else {
-            instructions = promptTemplateService.getSystemPrompt(scene, Map.of(
-                    "difficulty", difficulty,
-                    "accent", accent
-            ));
-            log.info("收到配置更新(扩展格式), sessionId={}, scene={}, difficulty={}, accent={}", sessionId, scene, difficulty, accent);
-        }
+        boolean hasVision = visionEnabledMap.getOrDefault(sessionId, false);
+        String instructions = promptTemplateService.getRealtimeSystemPrompt(scene, difficulty, accent, hasVision);
+        log.info("收到配置更新, sessionId={}, scene={}, difficulty={}, accent={}, vision={}",
+                sessionId, scene, difficulty, accent, hasVision);
 
         chatSessionService.updateSessionConfig(sessionId, scene, difficulty, accent);
         RealtimeChatClient ensuredClient = getOrCreateClient(session);
@@ -356,12 +348,14 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
             sessionMap.remove(currentSessionId, session);
             visionEnabledMap.remove(currentSessionId);
             imageQueueMap.remove(currentSessionId);
+            imageSentForCurrentTurn.remove(currentSessionId);
         }
 
         session.getAttributes().put("sessionId", requestedSessionId);
         sessionMap.put(requestedSessionId, session);
         metricsMap.computeIfAbsent(requestedSessionId, ignored -> new SessionMetrics());
         imageQueueMap.computeIfAbsent(requestedSessionId, ignored -> new FrontendImageQueue());
+        imageSentForCurrentTurn.remove(requestedSessionId);
         RealtimeChatClient client = getOrCreateClient(session);
         clientMap.put(requestedSessionId, client);
         sendLifecycleMessage(requestedSessionId, "reconnected", Map.of(
@@ -404,6 +398,7 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
         sessionMap.remove(sessionId);
         visionEnabledMap.remove(sessionId);
         imageQueueMap.remove(sessionId);
+        imageSentForCurrentTurn.remove(sessionId);
         RealtimeChatClient client = clientMap.remove(sessionId);
         if (client != null) {
             client.clearCurrentTurn();
@@ -513,19 +508,6 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
             }
         }
         return null;
-    }
-
-    static String buildInstructions(String lang, String role, boolean hasVision) {
-        if ("zh".equalsIgnoreCase(lang)) {
-            if (hasVision) {
-                return "你是一名" + role + "，图片信息是你眼镜所看到的内容。请简洁回答并适时纠正用户的英语。";
-            }
-            return "你是一名" + role + "。请简洁回答并适时纠正用户的英语。";
-        }
-        if (hasVision) {
-            return "You are " + role + ", the screenshot is what you see with your eyes. Answer concisely and correct the user's English when appropriate.";
-        }
-        return "You are " + role + ". Answer concisely and correct the user's English when appropriate.";
     }
 
     private static final class SessionMetrics {

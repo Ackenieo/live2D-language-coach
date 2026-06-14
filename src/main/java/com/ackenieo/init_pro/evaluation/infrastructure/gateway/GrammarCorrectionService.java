@@ -1,5 +1,6 @@
 package com.ackenieo.init_pro.evaluation.infrastructure.gateway;
 
+import com.ackenieo.init_pro.conversation.domain.service.PromptTemplateService;
 import com.ackenieo.init_pro.evaluation.domain.gateway.GrammarCorrector;
 import com.ackenieo.init_pro.evaluation.infrastructure.config.EvaluationConfig;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -29,13 +30,15 @@ public class GrammarCorrectionService implements GrammarCorrector {
     private final String baseUrl;
     private final String correctionModel;
     private final boolean enabled;
+    private final PromptTemplateService promptTemplateService;
 
-    public GrammarCorrectionService(EvaluationConfig config) {
+    public GrammarCorrectionService(EvaluationConfig config, PromptTemplateService promptTemplateService) {
         this.objectMapper = new ObjectMapper();
         this.enabled = config.isDoubaoEnabled();
         this.apiKey = config.getDoubaoApiKey();
         this.baseUrl = config.getDoubaoBaseUrl();
         this.correctionModel = config.getDoubaoCorrectionModel();
+        this.promptTemplateService = promptTemplateService;
 
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(config.getDoubaoTimeoutMillis()))
@@ -55,13 +58,7 @@ public class GrammarCorrectionService implements GrammarCorrector {
         }
 
         try {
-            String prompt = "You are an English grammar correction assistant. Check the following English text for grammar errors:\n" +
-                    "1. Only correct obvious grammar mistakes (verb tense, articles, subject-verb agreement, etc.)\n" +
-                    "2. Do not change the speaker's style or expression\n" +
-                    "3. Do not add or remove content\n" +
-                    "4. If there are no errors, output exactly one word: \u65e0\n" +
-                    "5. If there are errors, output only the corrected text with no explanation\n\n" +
-                    "Input text: " + userText;
+            String prompt = promptTemplateService.getGrammarCorrectionPrompt(userText);
 
             ObjectNode requestBody = objectMapper.createObjectNode();
             requestBody.put("model", correctionModel);

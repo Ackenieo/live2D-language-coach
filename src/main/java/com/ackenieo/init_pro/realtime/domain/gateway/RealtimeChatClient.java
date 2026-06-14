@@ -9,7 +9,7 @@ public interface RealtimeChatClient {
     boolean waitReady();
     void sendAudio(byte[] data);
     void sendText(String text);
-    void sendImage(String base64Image, String text);
+    boolean sendImage(String base64Image);
     void setInstructions(String instructions);
     void clearCurrentTurn();
     void close();

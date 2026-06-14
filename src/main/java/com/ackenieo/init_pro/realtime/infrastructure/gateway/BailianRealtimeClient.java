@@ -15,6 +15,7 @@ import com.ackenieo.init_pro.realtime.infrastructure.config.BailianConfig;
 import com.ackenieo.init_pro.shared.domain.DomainEventPublisher;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.drafts.Draft_6455;
 import org.java_websocket.handshake.ServerHandshake;
@@ -239,21 +240,30 @@ public class BailianRealtimeClient extends WebSocketClient implements RealtimeCh
     }
 
     @Override
-    public void sendImage(String base64Image, String text) {
+    public boolean sendImage(String base64Image) {
         if (!isOpen()) {
             log.warn("连接未打开");
-            return;
+            return false;
         }
         if (!waitReady()) {
             log.warn("会话未就绪");
-            return;
+            return false;
         }
         try {
-            send("{\"type\":\"input_image_buffer.append\",\"image\":\"" + base64Image + "\"}");
-            log.info("已发送图片(静默注入上下文), sessionId={}", sessionId);
+            send(buildImageAppendMessage(base64Image));
+            log.info("已发送图片上下文, sessionId={}", sessionId);
+            return true;
         } catch (Exception e) {
             log.error("发送图片失败", e);
+            return false;
         }
+    }
+
+    static String buildImageAppendMessage(String base64Image) throws Exception {
+        ObjectNode msg = objectMapper.createObjectNode();
+        msg.put("type", "input_image_buffer.append");
+        msg.put("image", base64Image);
+        return objectMapper.writeValueAsString(msg);
     }
 
     @Override
