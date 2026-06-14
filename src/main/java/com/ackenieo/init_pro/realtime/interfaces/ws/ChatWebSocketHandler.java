@@ -14,6 +14,8 @@ import com.ackenieo.init_pro.realtime.domain.event.AiSubtitleDeltaEvent;
 import com.ackenieo.init_pro.realtime.domain.event.UserTranscriptCompleteEvent;
 import com.ackenieo.init_pro.realtime.domain.gateway.RealtimeChatClient;
 import com.ackenieo.init_pro.realtime.domain.gateway.RealtimeChatClientFactory;
+import com.ackenieo.init_pro.realtime.domain.model.FrontendImage;
+import com.ackenieo.init_pro.realtime.domain.model.FrontendImageQueue;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -51,6 +53,7 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
     private final Map<String, RealtimeChatClient> clientMap = new ConcurrentHashMap<>();
     private final Map<String, WebSocketSession> sessionMap = new ConcurrentHashMap<>();
     private final Map<String, Boolean> visionEnabledMap = new ConcurrentHashMap<>();
+    private final Map<String, FrontendImageQueue> imageQueueMap = new ConcurrentHashMap<>();
     private final Map<String, SessionMetrics> metricsMap = new ConcurrentHashMap<>();
     private final ConversationMemoryService memoryService;
     private final RealtimeChatClientFactory clientFactory;
@@ -157,8 +160,10 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
                 }
             }
             metricsMap.put(sessionId, new SessionMetrics());
+            imageQueueMap.put(sessionId, new FrontendImageQueue());
         } else {
             metricsMap.computeIfAbsent(sessionId, ignored -> new SessionMetrics());
+            imageQueueMap.computeIfAbsent(sessionId, ignored -> new FrontendImageQueue());
         }
 
         session.getAttributes().put("sessionId", sessionId);
@@ -242,21 +247,7 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
                         client.sendText(json.has("text") ? json.get("text").asText() : "");
                     }
                 }
-                case "screenshot" -> {
-                    if (client != null && client.isConnected()) {
-                        if (!memoryService.hasVisualKeywordInLatestUserText(sessionId)) {
-                            log.info("图片脱敏拦截: sessionId={}, 最新用户文本无视觉关键词", sessionId);
-                            break;
-                        }
-                        String image = json.has("image") ? json.get("image").asText() : "";
-                        String prompt = json.has("prompt") ? json.get("prompt").asText() : "请简洁描述这张图片的内容";
-                        if (!image.isEmpty()) {
-                            int commaIdx = image.indexOf(',');
-                            String pureBase64 = commaIdx >= 0 ? image.substring(commaIdx + 1) : image;
-                            client.sendImage(pureBase64, prompt);
-                        }
-                    }
-                }
+                case "screenshot" -> handleScreenshotMessage(sessionId, client, json);
                 case "config" -> handleConfigMessage(session, json, sessionId);
                 case "start" -> {
                     RealtimeChatClient ensuredClient = getOrCreateClient(session);
@@ -270,6 +261,36 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
         } catch (Exception e) {
             log.warn("解析消息失败", e);
         }
+    }
+
+    private void handleScreenshotMessage(String sessionId, RealtimeChatClient client, JsonNode json) {
+        String image = json.has("image") ? json.get("image").asText() : "";
+        if (image.isBlank()) {
+            return;
+        }
+
+        String prompt = json.has("prompt") ? json.get("prompt").asText() : "请简洁描述这张图片的内容";
+        FrontendImageQueue imageQueue = imageQueueMap.computeIfAbsent(sessionId, ignored -> new FrontendImageQueue());
+        imageQueue.enqueueAndTail(normalizeBase64Image(image), prompt);
+        log.info("前端图片已入队, sessionId={}, queueSize={}", sessionId, imageQueue.size());
+
+        if (client == null || !client.isConnected()) {
+            return;
+        }
+        if (!memoryService.hasVisualKeywordInLatestUserText(sessionId)) {
+            log.info("图片脱敏拦截: sessionId={}, 最新用户文本无视觉关键词", sessionId);
+            return;
+        }
+
+        FrontendImage imageToSend = imageQueue.tail();
+        if (imageToSend != null) {
+            client.sendImage(imageToSend.base64Image(), imageToSend.prompt());
+        }
+    }
+
+    private String normalizeBase64Image(String image) {
+        int commaIdx = image.indexOf(',');
+        return commaIdx >= 0 ? image.substring(commaIdx + 1) : image;
     }
 
     private void handleConfigMessage(WebSocketSession session, JsonNode json, String sessionId) throws Exception {
@@ -323,11 +344,13 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
         if (currentSessionId != null && !currentSessionId.equals(requestedSessionId)) {
             sessionMap.remove(currentSessionId, session);
             visionEnabledMap.remove(currentSessionId);
+            imageQueueMap.remove(currentSessionId);
         }
 
         session.getAttributes().put("sessionId", requestedSessionId);
         sessionMap.put(requestedSessionId, session);
         metricsMap.computeIfAbsent(requestedSessionId, ignored -> new SessionMetrics());
+        imageQueueMap.computeIfAbsent(requestedSessionId, ignored -> new FrontendImageQueue());
         RealtimeChatClient client = getOrCreateClient(session);
         clientMap.put(requestedSessionId, client);
         sendLifecycleMessage(requestedSessionId, "reconnected", Map.of(
@@ -369,6 +392,7 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
 
         sessionMap.remove(sessionId);
         visionEnabledMap.remove(sessionId);
+        imageQueueMap.remove(sessionId);
         RealtimeChatClient client = clientMap.remove(sessionId);
         if (client != null) {
             client.clearCurrentTurn();
