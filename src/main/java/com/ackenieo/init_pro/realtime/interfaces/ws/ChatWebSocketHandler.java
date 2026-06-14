@@ -7,6 +7,7 @@ import com.ackenieo.init_pro.conversation.domain.service.PromptTemplateService;
 import com.ackenieo.init_pro.evaluation.domain.entity.PronunciationResult;
 import com.ackenieo.init_pro.evaluation.domain.event.GrammarCorrectedEvent;
 import com.ackenieo.init_pro.evaluation.domain.event.PronunciationEvaluatedEvent;
+import com.ackenieo.init_pro.realtime.domain.event.AiAudioDoneEvent;
 import com.ackenieo.init_pro.realtime.domain.event.AiAudioDeltaEvent;
 import com.ackenieo.init_pro.realtime.domain.event.AiSubtitleCompleteEvent;
 import com.ackenieo.init_pro.realtime.domain.event.AiSubtitleDeltaEvent;
@@ -56,6 +57,7 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
     private final Map<String, FrontendImageQueue> imageQueueMap = new ConcurrentHashMap<>();
     private final Map<String, SessionMetrics> metricsMap = new ConcurrentHashMap<>();
     private final Set<String> imageSentForCurrentTurn = ConcurrentHashMap.newKeySet();
+    private final Set<String> audioStartSent = ConcurrentHashMap.newKeySet();
     private final RealtimeChatClientFactory clientFactory;
     private final PromptTemplateService promptTemplateService;
     private final ChatSessionService chatSessionService;
@@ -76,6 +78,7 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
         WebSocketSession session = sessionMap.get(event.getSessionId());
         if (session != null && session.isOpen()) {
             try {
+                sendAudioStartIfNeeded(event);
                 session.sendMessage(new BinaryMessage(ByteBuffer.wrap(event.getAudioData())));
             } catch (IOException e) {
                 log.error("转发AI音频失败, sessionId={}", event.getSessionId(), e);
@@ -84,13 +87,28 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
     }
 
     @EventListener
+    public void onAiAudioDone(AiAudioDoneEvent event) {
+        if (event.getResponseId().isBlank()) {
+            return;
+        }
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("type", "ai_audio_done");
+        payload.put("responseId", event.getResponseId());
+        putIfNotBlank(payload, "itemId", event.getItemId());
+        sendRawTextToFrontend(event.getSessionId(), payload);
+        audioStartSent.remove(responseKey(event.getSessionId(), event.getResponseId()));
+    }
+
+    @EventListener
     public void onAiSubtitleDelta(AiSubtitleDeltaEvent event) {
-        sendTextToFrontend(event.getSessionId(), Map.of("type", "ai_subtitle", "text", event.getText()));
+        sendAiTextToFrontend(event.getSessionId(), "ai_subtitle",
+                event.getText(), event.getResponseId(), event.getItemId());
     }
 
     @EventListener
     public void onAiSubtitleComplete(AiSubtitleCompleteEvent event) {
-        sendTextToFrontend(event.getSessionId(), Map.of("type", "ai_subtitle_complete", "text", event.getText()));
+        sendAiTextToFrontend(event.getSessionId(), "ai_subtitle_complete",
+                event.getText(), event.getResponseId(), event.getItemId());
     }
 
     @EventListener
@@ -161,10 +179,12 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
             metricsMap.put(sessionId, new SessionMetrics());
             imageQueueMap.put(sessionId, new FrontendImageQueue());
             imageSentForCurrentTurn.remove(sessionId);
+            clearAudioStartState(sessionId);
         } else {
             metricsMap.computeIfAbsent(sessionId, ignored -> new SessionMetrics());
             imageQueueMap.computeIfAbsent(sessionId, ignored -> new FrontendImageQueue());
             imageSentForCurrentTurn.remove(sessionId);
+            clearAudioStartState(sessionId);
         }
 
         session.getAttributes().put("sessionId", sessionId);
@@ -349,6 +369,7 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
             visionEnabledMap.remove(currentSessionId);
             imageQueueMap.remove(currentSessionId);
             imageSentForCurrentTurn.remove(currentSessionId);
+            clearAudioStartState(currentSessionId);
         }
 
         session.getAttributes().put("sessionId", requestedSessionId);
@@ -399,6 +420,7 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
         visionEnabledMap.remove(sessionId);
         imageQueueMap.remove(sessionId);
         imageSentForCurrentTurn.remove(sessionId);
+        clearAudioStartState(sessionId);
         RealtimeChatClient client = clientMap.remove(sessionId);
         if (client != null) {
             client.clearCurrentTurn();
@@ -432,6 +454,52 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
     public void handleTransportError(WebSocketSession session, Throwable exception) throws Exception {
         log.error("WebSocket传输错误", exception);
         finishSession((String) session.getAttributes().get("sessionId"), false);
+    }
+
+    private void sendAudioStartIfNeeded(AiAudioDeltaEvent event) {
+        if (event.getResponseId().isBlank()) {
+            return;
+        }
+        String key = responseKey(event.getSessionId(), event.getResponseId());
+        if (!audioStartSent.add(key)) {
+            return;
+        }
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("type", "ai_audio_start");
+        payload.put("responseId", event.getResponseId());
+        payload.put("sampleRate", 24000);
+        putIfNotBlank(payload, "itemId", event.getItemId());
+        sendRawTextToFrontend(event.getSessionId(), payload);
+    }
+
+    private void sendAiTextToFrontend(String sessionId,
+                                      String type,
+                                      String text,
+                                      String responseId,
+                                      String itemId) {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("type", type);
+        payload.put("text", text);
+        putIfNotBlank(payload, "responseId", responseId);
+        putIfNotBlank(payload, "itemId", itemId);
+        sendRawTextToFrontend(sessionId, payload);
+    }
+
+    private static void putIfNotBlank(Map<String, Object> payload, String key, String value) {
+        if (value != null && !value.isBlank()) {
+            payload.put(key, value);
+        }
+    }
+
+    private void clearAudioStartState(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return;
+        }
+        audioStartSent.removeIf(key -> key.startsWith(sessionId + "|"));
+    }
+
+    private static String responseKey(String sessionId, String responseId) {
+        return sessionId + "|" + responseId;
     }
 
     private void sendTextToFrontend(String sessionId, Map<String, String> data) {
