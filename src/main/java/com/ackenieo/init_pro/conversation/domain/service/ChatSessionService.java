@@ -6,7 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -52,20 +52,31 @@ public class ChatSessionService {
         return chatSessionRepository.save(session);
     }
 
-    public ChatSession endSession(String sessionId, String totalGrade) {
+    public ChatSession endSession(String sessionId, SessionAggregate aggregate) {
         Optional<ChatSession> opt = chatSessionRepository.findById(sessionId);
         if (opt.isEmpty()) {
             log.warn("对话会话不存在: {}", sessionId);
             return null;
         }
         ChatSession session = opt.get();
-        session.setEndedAt(LocalDateTime.now());
-        session.setTotalGrade(totalGrade);
+        session.setEndedAt(aggregate.endedAt());
+        session.setDurationSeconds(aggregate.durationSeconds());
+        session.setMessageCount(aggregate.messageCount());
+        session.setOverallScore(aggregate.overallScore());
+        session.setAccuracyScore(aggregate.accuracyScore());
+        session.setFluencyScore(aggregate.fluencyScore());
+        session.setCompletenessScore(aggregate.completenessScore());
+        session.setSuggestion(aggregate.suggestion());
+        session.setTotalGrade(aggregate.overallScore());
         session.markUpdated();
         return chatSessionRepository.save(session);
     }
 
     public Optional<ChatSession> findById(String sessionId) {
         return chatSessionRepository.findById(sessionId);
+    }
+
+    public List<ChatSession> findEndedSessionsByUserId(String userId, int offset, int limit) {
+        return chatSessionRepository.findEndedSessionsByUserId(userId, offset, limit);
     }
 }

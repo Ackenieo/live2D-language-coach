@@ -14,8 +14,8 @@ spring:
   data:
     redis:
       host: localhost
-      port: 6379
-      password: Chenkun123
+      port: 6454
+     # password: Chenkun123
       database: 0
       timeout: 5000ms
 
@@ -39,7 +39,7 @@ app:
     refresh-expiration: 604800000
   sms:
     url: https://push.spug.cc/sms/d_C0w7AnQGqO1S8SmyEwZA
-    product-name: Live2DLanguageCoach
+    product-name: LDC
 
 bailian:
   api-key: sk-268b7bc8cf3142a4bc34a0396e90d275
@@ -66,3 +66,10 @@ doubao:
   chat-model: doubao-seed-1-6
   correction-model: doubao-seed-1-6
   timeout-millis: 30000
+
+oss:
+  enabled: true
+  endpoint: oss-cn-beijing.aliyuncs.com
+  access-key-id: LTAI5t5hUsaXhDmRHDEdtuVk
+  access-key-secret: s37vZ8tywq5FILw6c30AgBXvTv1vhl
+  bucket-name: english-ai-coach

@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 public class ChatMessageRepositoryImpl implements ChatMessageRepository {
@@ -18,7 +19,11 @@ public class ChatMessageRepositoryImpl implements ChatMessageRepository {
 
     @Override
     public ChatMessage save(ChatMessage message) {
-        chatMessageMapper.insert(message);
+        if (message.getId() != null && chatMessageMapper.selectById(message.getId()) != null) {
+            chatMessageMapper.updateById(message);
+        } else {
+            chatMessageMapper.insert(message);
+        }
         return message;
     }
 
@@ -29,5 +34,16 @@ public class ChatMessageRepositoryImpl implements ChatMessageRepository {
                         .eq(ChatMessage::getSessionId, sessionId)
                         .orderByAsc(ChatMessage::getCreatedAt)
         );
+    }
+
+    @Override
+    public Optional<ChatMessage> findBySessionIdAndTurnId(String sessionId, String turnId) {
+        return Optional.ofNullable(chatMessageMapper.selectOne(
+                new LambdaQueryWrapper<ChatMessage>()
+                        .eq(ChatMessage::getSessionId, sessionId)
+                        .eq(ChatMessage::getTurnId, turnId)
+                        .orderByDesc(ChatMessage::getCreatedAt)
+                        .last("LIMIT 1")
+        ));
     }
 }

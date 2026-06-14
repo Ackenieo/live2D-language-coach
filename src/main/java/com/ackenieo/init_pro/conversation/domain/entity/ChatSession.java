@@ -16,6 +16,13 @@ public class ChatSession extends BaseEntity {
     private String accent;
     private LocalDateTime endedAt;
     private String totalGrade;
+    private String accuracyScore;
+    private String fluencyScore;
+    private String completenessScore;
+    private String overallScore;
+    private String suggestion;
+    private Integer durationSeconds;
+    private Integer messageCount;
 
     public ChatSession() {
     }
@@ -39,4 +46,18 @@ public class ChatSession extends BaseEntity {
     public void setEndedAt(LocalDateTime endedAt) { this.endedAt = endedAt; }
     public String getTotalGrade() { return totalGrade; }
     public void setTotalGrade(String totalGrade) { this.totalGrade = totalGrade; }
+    public String getAccuracyScore() { return accuracyScore; }
+    public void setAccuracyScore(String accuracyScore) { this.accuracyScore = accuracyScore; }
+    public String getFluencyScore() { return fluencyScore; }
+    public void setFluencyScore(String fluencyScore) { this.fluencyScore = fluencyScore; }
+    public String getCompletenessScore() { return completenessScore; }
+    public void setCompletenessScore(String completenessScore) { this.completenessScore = completenessScore; }
+    public String getOverallScore() { return overallScore; }
+    public void setOverallScore(String overallScore) { this.overallScore = overallScore; }
+    public String getSuggestion() { return suggestion; }
+    public void setSuggestion(String suggestion) { this.suggestion = suggestion; }
+    public Integer getDurationSeconds() { return durationSeconds; }
+    public void setDurationSeconds(Integer durationSeconds) { this.durationSeconds = durationSeconds; }
+    public Integer getMessageCount() { return messageCount; }
+    public void setMessageCount(Integer messageCount) { this.messageCount = messageCount; }
 }

@@ -2,6 +2,7 @@ package com.ackenieo.init_pro.conversation.domain.service;
 
 import com.ackenieo.init_pro.conversation.domain.entity.ChatMessage;
 import com.ackenieo.init_pro.conversation.domain.repository.ChatMessageRepository;
+import com.ackenieo.init_pro.evaluation.domain.event.PronunciationEvaluatedEvent;
 import com.ackenieo.init_pro.realtime.domain.event.AiSubtitleCompleteEvent;
 import com.ackenieo.init_pro.realtime.domain.event.UserTranscriptCompleteEvent;
 import org.slf4j.Logger;
@@ -58,6 +59,30 @@ public class ChatMessagePersistenceService {
             log.debug("用户消息已入库, sessionId={}, turnId={}", event.getSessionId(), event.getTurnId());
         } catch (Exception e) {
             log.error("用户消息入库失败, sessionId={}", event.getSessionId(), e);
+        }
+    }
+
+    /**
+     * 发音评测完成 → 更新对应用户消息评分
+     */
+    @Async
+    @EventListener
+    public void onPronunciationEvaluated(PronunciationEvaluatedEvent event) {
+        try {
+            var result = event.getResult();
+            chatMessageRepository.findBySessionIdAndTurnId(result.sessionId(), result.turnId()).ifPresent(message -> {
+                message.setPronAccuracy(result.pronAccuracy());
+                message.setPronFluency(result.pronFluency());
+                message.setPronCompletion(result.pronCompletion());
+                message.setAccuracyGrade(result.accuracyGrade());
+                message.setFluencyGrade(result.fluencyGrade());
+                message.setCompletionGrade(result.completionGrade());
+                message.markUpdated();
+                chatMessageRepository.save(message);
+            });
+            log.debug("发音评分已更新, sessionId={}, turnId={}", result.sessionId(), result.turnId());
+        } catch (Exception e) {
+            log.error("发音评分更新失败, eventId={}", event.getEventId(), e);
         }
     }
 }

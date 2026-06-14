@@ -4,13 +4,13 @@ server:
 spring:
   application:
     name: live2D-language-coach
-  
+
   datasource:
     url: jdbc:mysql://localhost:3381/live2d_language_coach?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
     username: init_pro
     password: init_pro123
     driver-class-name: com.mysql.cj.jdbc.Driver
-  
+
   data:
     redis:
       host: localhost
@@ -37,3 +37,10 @@ mybatis-plus:
       logic-delete-field: deleted
       logic-delete-value: 1
       logic-not-delete-value: 0
+
+oss:
+  enabled: true
+  endpoint: oss-cn-beijing.aliyuncs.com
+  access-key-id: ${OSS_ACCESS_KEY_ID:}
+  access-key-secret: ${OSS_ACCESS_KEY_SECRET:}
+  bucket-name: english-ai-coach

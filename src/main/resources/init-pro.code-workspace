@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"name": "init-pro",
+			"path": "../../../.."
+		},
+		{
+			"name": "frontend",
+			"path": "../../../../../../../LLM_Live2D-master/frontend"
+		}
+	],
+	"settings": {}
+}
