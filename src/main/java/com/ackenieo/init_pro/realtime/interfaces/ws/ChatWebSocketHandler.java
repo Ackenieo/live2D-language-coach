@@ -104,6 +104,7 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
                 "turnId", event.getTurnId(),
                 "text", event.getText()
         ));
+        sendTailImageForVisualIntent(event.getSessionId(), event.getText());
     }
 
     @EventListener
@@ -247,7 +248,7 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
                         client.sendText(json.has("text") ? json.get("text").asText() : "");
                     }
                 }
-                case "screenshot" -> handleScreenshotMessage(sessionId, client, json);
+                case "screenshot" -> handleScreenshotMessage(sessionId, json);
                 case "config" -> handleConfigMessage(session, json, sessionId);
                 case "start" -> {
                     RealtimeChatClient ensuredClient = getOrCreateClient(session);
@@ -263,7 +264,7 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
         }
     }
 
-    private void handleScreenshotMessage(String sessionId, RealtimeChatClient client, JsonNode json) {
+    private void handleScreenshotMessage(String sessionId, JsonNode json) {
         String image = json.has("image") ? json.get("image").asText() : "";
         if (image.isBlank()) {
             return;
@@ -273,20 +274,30 @@ public class ChatWebSocketHandler extends AbstractWebSocketHandler {
         FrontendImageQueue imageQueue = imageQueueMap.computeIfAbsent(sessionId, ignored -> new FrontendImageQueue());
         imageQueue.enqueueAndTail(normalizeBase64Image(image), prompt);
         log.info("前端图片已入队, sessionId={}, queueSize={}", sessionId, imageQueue.size());
-
-        if (client == null || !client.isConnected()) {
-            return;
-        }
-        if (!memoryService.hasVisualKeywordInLatestUserText(sessionId)) {
-            log.info("图片脱敏拦截: sessionId={}, 最新用户文本无视觉关键词", sessionId);
-            return;
-        }
-
-        FrontendImage imageToSend = imageQueue.tail();
-        if (imageToSend != null) {
-            client.sendImage(imageToSend.base64Image(), imageToSend.prompt());
-        }
     }
+
+    private void sendTailImageForVisualIntent(String sessionId, String userText) {
+        if (!memoryService.hasVisualKeyword(userText)) {
+            return;
+        }
+
+        RealtimeChatClient client = clientMap.get(sessionId);
+        if (client == null || !client.isConnected()) {
+            log.info("Visual intent detected but realtime client is not connected, sessionId={}", sessionId);
+            return;
+        }
+
+        FrontendImageQueue imageQueue = imageQueueMap.get(sessionId);
+        FrontendImage imageToSend = imageQueue == null ? null : imageQueue.tail();
+        if (imageToSend == null) {
+            log.info("Visual intent detected but image queue is empty, sessionId={}", sessionId);
+            return;
+        }
+
+        client.sendImage(imageToSend.base64Image(), imageToSend.prompt());
+        log.info("Sent queued tail image for visual intent, sessionId={}", sessionId);
+    }
+
 
     private String normalizeBase64Image(String image) {
         int commaIdx = image.indexOf(',');

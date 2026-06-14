@@ -44,13 +44,17 @@ public class ConversationMemoryService {
         log.info("清空对话历史: sessionId={}", sessionId);
     }
 
+    public boolean hasVisualKeyword(String text) {
+        return text != null && VISUAL_INTENT_PATTERN.matcher(text).find();
+    }
+
     public boolean hasVisualKeywordInLatestUserText(String sessionId) {
         List<Map<String, String>> messages = chatMemory.get(sessionId);
         for (int i = messages.size() - 1; i >= 0; i--) {
             Map<String, String> msg = messages.get(i);
             if ("user".equals(msg.get("role"))) {
                 String text = msg.get("text");
-                boolean found = text != null && VISUAL_INTENT_PATTERN.matcher(text).find();
+                boolean found = hasVisualKeyword(text);
                 if (found) {
                     log.info("检测到视觉关键词: sessionId={}, text={}", sessionId, text);
                 }
