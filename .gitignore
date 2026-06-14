@@ -32,8 +32,36 @@ build/
 ### VS Code ###
 .vscode/
 
-### Project-specific ###
+### Frontend shared ###
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
 
+node_modules
+dist-ssr
+*.local
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.tsbuildinfo
+.env
+doc/
+
+### Sensitive local config ###
+src/main/resources/application-dev.yml
+
+### Workspace files ###
+*.code-workspace
+
+### Project-specific ###
 CLAUDE.md
 .claude/
 script_home/

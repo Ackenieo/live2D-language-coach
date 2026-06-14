@@ -3,6 +3,7 @@ package com.ackenieo.init_pro.realtime.infrastructure.gateway;
 import com.ackenieo.init_pro.conversation.domain.service.ConversationMemoryService;
 import com.ackenieo.init_pro.evaluation.domain.service.AudioTurnBufferService;
 import com.ackenieo.init_pro.evaluation.domain.service.EvaluationService;
+import com.ackenieo.init_pro.realtime.domain.event.AiAudioDoneEvent;
 import com.ackenieo.init_pro.realtime.domain.event.AiAudioDeltaEvent;
 import com.ackenieo.init_pro.realtime.domain.event.AiSubtitleCompleteEvent;
 import com.ackenieo.init_pro.realtime.domain.event.AiSubtitleDeltaEvent;
@@ -139,16 +140,23 @@ public class BailianRealtimeClient extends WebSocketClient implements RealtimeCh
                 case "input_audio_buffer.committed" -> log.info("音频已提交");
                 case "conversation.item.created" -> log.info("对话项已创建, 准备生成回复");
                 case "response.audio.delta" -> {
-                    byte[] audio = Base64.getDecoder().decode(json.get("delta").asText());
-                    eventPublisher.publish(new AiAudioDeltaEvent(sessionId, audio));
+                    String delta = json.has("delta") ? json.get("delta").asText() : "";
+                    if (!delta.isBlank()) {
+                        byte[] audio = Base64.getDecoder().decode(delta);
+                        eventPublisher.publish(new AiAudioDeltaEvent(
+                                sessionId, audio, responseId(json), itemId(json)));
+                    }
+                }
+                case "response.audio.done" -> {
+                    eventPublisher.publish(new AiAudioDoneEvent(sessionId, responseId(json), itemId(json)));
                 }
                 case "response.audio_transcript.delta" -> {
                     String text = json.get("delta").asText();
-                    eventPublisher.publish(new AiSubtitleDeltaEvent(sessionId, text));
+                    eventPublisher.publish(new AiSubtitleDeltaEvent(sessionId, text, responseId(json), itemId(json)));
                 }
                 case "response.audio_transcript.done" -> {
                     String text = json.get("transcript").asText();
-                    eventPublisher.publish(new AiSubtitleCompleteEvent(sessionId, text));
+                    eventPublisher.publish(new AiSubtitleCompleteEvent(sessionId, text, responseId(json), itemId(json)));
                     if (memoryService != null) {
                         memoryService.saveMessage(sessionId, "assistant", text);
                     }
@@ -284,6 +292,26 @@ public class BailianRealtimeClient extends WebSocketClient implements RealtimeCh
 
     private String safeTurnId(String turnId) {
         return turnId == null ? "" : turnId;
+    }
+
+    private static String responseId(JsonNode json) {
+        return firstText(json, "response_id", "responseId");
+    }
+
+    private static String itemId(JsonNode json) {
+        return firstText(json, "item_id", "itemId");
+    }
+
+    private static String firstText(JsonNode json, String... fields) {
+        for (String field : fields) {
+            if (json.hasNonNull(field)) {
+                String value = json.get(field).asText();
+                if (!value.isBlank()) {
+                    return value;
+                }
+            }
+        }
+        return "";
     }
 
     /**
