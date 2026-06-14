@@ -4,6 +4,7 @@ import com.ackenieo.init_pro.conversation.domain.entity.ChatSession;
 import com.ackenieo.init_pro.conversation.domain.repository.ChatSessionRepository;
 import com.ackenieo.init_pro.conversation.interfaces.dto.LeaderboardItemResponse;
 import com.ackenieo.init_pro.conversation.interfaces.dto.LeaderboardResponse;
+import com.ackenieo.init_pro.evaluation.domain.model.GradeScale;
 import com.ackenieo.init_pro.user.domain.entity.User;
 import com.ackenieo.init_pro.user.domain.repository.UserRepository;
 import org.springframework.stereotype.Service;
@@ -95,26 +96,10 @@ public class LeaderboardAppService {
     }
 
     private Double gradeToScore(String grade) {
-        if (grade == null || grade.isBlank() || "-".equals(grade)) {
-            return null;
-        }
-        return switch (grade) {
-            case "S" -> 100D;
-            case "A" -> 90D;
-            case "B" -> 80D;
-            case "C" -> 60D;
-            case "D" -> 45D;
-            case "E" -> 20D;
-            default -> null;
-        };
+        return GradeScale.toRepresentativeScore(grade);
     }
 
     private String scoreToGrade(double score) {
-        if (score >= 95) return "S";
-        if (score >= 85) return "A";
-        if (score >= 70) return "B";
-        if (score >= 55) return "C";
-        if (score >= 40) return "D";
-        return "E";
+        return GradeScale.fromScore(score);
     }
 }

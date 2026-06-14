@@ -6,6 +6,7 @@ import com.ackenieo.init_pro.conversation.domain.repository.ChatMessageRepositor
 import com.ackenieo.init_pro.conversation.domain.service.ChatSessionService;
 import com.ackenieo.init_pro.conversation.domain.service.SessionAggregate;
 import com.ackenieo.init_pro.evaluation.domain.entity.PronunciationResult;
+import com.ackenieo.init_pro.evaluation.domain.model.GradeScale;
 import com.ackenieo.init_pro.user.domain.repository.UserRepository;
 import org.springframework.stereotype.Service;
 
@@ -128,18 +129,7 @@ public class SessionFinalizeAppService {
     }
 
     private Double gradeToScore(String grade) {
-        if (grade == null || grade.isBlank() || "-".equals(grade)) {
-            return null;
-        }
-        return switch (grade) {
-            case "S" -> 100D;
-            case "A" -> 90D;
-            case "B" -> 80D;
-            case "C" -> 60D;
-            case "D" -> 45D;
-            case "E" -> 20D;
-            default -> null;
-        };
+        return GradeScale.toRepresentativeScore(grade);
     }
 
     public record SessionFinalizeResult(
