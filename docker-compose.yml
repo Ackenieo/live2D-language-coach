@@ -1,6 +1,21 @@
-version: '3.8'
-
 services:
+  sentinel-dashboard:
+    build:
+      context: .
+      dockerfile: docker/sentinel-dashboard/Dockerfile
+      args:
+        SENTINEL_VERSION: 1.8.9
+    container_name: live2d-language-coach-sentinel-dashboard
+    ports:
+      - "8858:8858"
+    environment:
+      SENTINEL_DASHBOARD_PORT: 8858
+      SENTINEL_DASHBOARD_USERNAME: ${SENTINEL_DASHBOARD_USERNAME:-sentinel}
+      SENTINEL_DASHBOARD_PASSWORD: ${SENTINEL_DASHBOARD_PASSWORD:-sentinel}
+    networks:
+      - live2d-language-coach-network
+    restart: unless-stopped
+
   redis:
     image: redis:7-alpine
     container_name: live2d-language-coach-redis
