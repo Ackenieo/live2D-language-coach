@@ -48,7 +48,8 @@ public class PromptTemplateService {
 
     private static final String VISION_ENABLED_INSTRUCTION =
             "Image input may be available in the current turn. Treat it as what you can see, " +
-            "and answer questions about the image only when it is relevant.";
+            "and answer questions about the image only when it is relevant. " +
+            "If the user does not directly mention seeing, images, screenshots, or visual content, do not describe visual information.";
 
     private static final String VISION_DISABLED_INSTRUCTION =
             "If the user asks what you can see but no image is available, say \"Excuse me?\" and ask them to show it again.";

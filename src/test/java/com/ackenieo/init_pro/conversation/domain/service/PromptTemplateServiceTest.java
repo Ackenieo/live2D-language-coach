@@ -51,5 +51,6 @@ class PromptTemplateServiceTest {
 
         assertThat(prompt).contains("outgoing and friendly classmate");
         assertThat(prompt).contains("Image input may be available");
+        assertThat(prompt).contains("do not describe visual information");
     }
 }
