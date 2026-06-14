@@ -3,21 +3,32 @@ package com.ackenieo.init_pro.realtime.interfaces.ws;
 import com.ackenieo.init_pro.conversation.application.service.SessionFinalizeAppService;
 import com.ackenieo.init_pro.conversation.domain.service.ChatSessionService;
 import com.ackenieo.init_pro.conversation.domain.service.PromptTemplateService;
+import com.ackenieo.init_pro.realtime.domain.event.AiAudioDeltaEvent;
+import com.ackenieo.init_pro.realtime.domain.event.AiAudioDoneEvent;
 import com.ackenieo.init_pro.realtime.domain.event.UserTranscriptCompleteEvent;
 import com.ackenieo.init_pro.realtime.domain.gateway.RealtimeChatClient;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.WebSocketMessage;
 import org.springframework.web.socket.WebSocketSession;
 
+import java.nio.ByteBuffer;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 class ChatWebSocketHandlerTest {
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     @Test
     void configMessagesUseSceneTemplatesEvenWhenLegacyRoleFieldsArePresent() throws Exception {
@@ -59,6 +70,41 @@ class ChatWebSocketHandlerTest {
         assertThat(client.imageSendCount).isEqualTo(2);
     }
 
+    @Test
+    void sendsAudioLifecycleMessagesAroundBinaryChunks() throws Exception {
+        FakeRealtimeChatClient client = new FakeRealtimeChatClient();
+        ChatWebSocketHandler handler = newHandler(client);
+        WebSocketSession session = session("unused-before-connect");
+        when(session.isOpen()).thenReturn(true);
+
+        handler.afterConnectionEstablished(session);
+        String sessionId = (String) session.getAttributes().get("sessionId");
+        clearInvocations(session);
+
+        handler.onAiAudioDelta(new AiAudioDeltaEvent(sessionId, new byte[] {1, 2}, "response-1", "item-1"));
+        handler.onAiAudioDelta(new AiAudioDeltaEvent(sessionId, new byte[] {3, 4}, "response-1", "item-1"));
+        handler.onAiAudioDone(new AiAudioDoneEvent(sessionId, "response-1", "item-1"));
+
+        @SuppressWarnings("unchecked")
+        org.mockito.ArgumentCaptor<WebSocketMessage<?>> captor =
+                org.mockito.ArgumentCaptor.forClass(WebSocketMessage.class);
+        verify(session, times(4)).sendMessage(captor.capture());
+
+        List<WebSocketMessage<?>> messages = captor.getAllValues();
+        JsonNode start = OBJECT_MAPPER.readTree(((TextMessage) messages.get(0)).getPayload());
+        JsonNode done = OBJECT_MAPPER.readTree(((TextMessage) messages.get(3)).getPayload());
+
+        assertThat(start.get("type").asText()).isEqualTo("ai_audio_start");
+        assertThat(start.get("responseId").asText()).isEqualTo("response-1");
+        assertThat(start.get("itemId").asText()).isEqualTo("item-1");
+        assertThat(start.get("sampleRate").asInt()).isEqualTo(24000);
+        assertThat(binaryPayload((BinaryMessage) messages.get(1))).containsExactly(1, 2);
+        assertThat(binaryPayload((BinaryMessage) messages.get(2))).containsExactly(3, 4);
+        assertThat(done.get("type").asText()).isEqualTo("ai_audio_done");
+        assertThat(done.get("responseId").asText()).isEqualTo("response-1");
+        assertThat(done.get("itemId").asText()).isEqualTo("item-1");
+    }
+
     private ChatWebSocketHandler newHandler(FakeRealtimeChatClient client) {
         return new ChatWebSocketHandler(
                 sessionId -> client,
@@ -74,6 +120,13 @@ class ChatWebSocketHandlerTest {
         attributes.put("sessionId", sessionId);
         when(session.getAttributes()).thenReturn(attributes);
         return session;
+    }
+
+    private byte[] binaryPayload(BinaryMessage message) {
+        ByteBuffer payload = message.getPayload();
+        byte[] bytes = new byte[payload.remaining()];
+        payload.get(bytes);
+        return bytes;
     }
 
     private static final class FakeRealtimeChatClient implements RealtimeChatClient {

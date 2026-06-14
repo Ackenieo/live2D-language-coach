@@ -3,33 +3,22 @@ package com.ackenieo.init_pro.realtime.domain.event;
 import com.ackenieo.init_pro.shared.domain.DomainEvent;
 
 /**
- * AI音频增量事件
- * 百炼返回音频流片段时发布
+ * AI audio stream finished for one realtime response.
  */
-public class AiAudioDeltaEvent extends DomainEvent {
+public class AiAudioDoneEvent extends DomainEvent {
     private final String sessionId;
-    private final byte[] audioData;
     private final String responseId;
     private final String itemId;
 
-    public AiAudioDeltaEvent(String sessionId, byte[] audioData) {
-        this(sessionId, audioData, "", "");
-    }
-
-    public AiAudioDeltaEvent(String sessionId, byte[] audioData, String responseId, String itemId) {
+    public AiAudioDoneEvent(String sessionId, String responseId, String itemId) {
         super(sessionId);
         this.sessionId = sessionId;
-        this.audioData = audioData;
         this.responseId = responseId == null ? "" : responseId;
         this.itemId = itemId == null ? "" : itemId;
     }
 
     public String getSessionId() {
         return sessionId;
-    }
-
-    public byte[] getAudioData() {
-        return audioData;
     }
 
     public String getResponseId() {

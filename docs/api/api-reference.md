@@ -546,6 +546,59 @@ ws://localhost:8520/ws/bailian?token=<accessToken>
 
 **二进制音频**：int16 PCM，采样率 24000Hz。服务端通过 WebSocket BinaryMessage 发送。
 
+#### speech-link metadata and lip-sync extension
+
+`speech-link` defines the realtime chain from Bailian audio to backend WebSocket forwarding, frontend WebAudio playback, and Live2D mouth movement. The current stable contract remains:
+
+- AI audio is sent as WebSocket `BinaryMessage`.
+- AI subtitles are sent as JSON text messages.
+- The main model is not required to output lip-sync JSON.
+- Frontend lip frames are generated from actual playback audio plus subtitle text.
+
+Planned optional metadata fields for AI subtitle messages:
+
+```json
+{
+  "type": "ai_subtitle",
+  "responseId": "response-xxx",
+  "itemId": "item-xxx",
+  "text": "Certainly"
+}
+```
+
+```json
+{
+  "type": "ai_subtitle_complete",
+  "responseId": "response-xxx",
+  "itemId": "item-xxx",
+  "text": "Certainly. Do you have a reservation?"
+}
+```
+
+Planned optional AI audio lifecycle messages:
+
+```json
+{ "type": "ai_audio_start", "responseId": "response-xxx", "sampleRate": 24000 }
+{ "type": "ai_audio_done", "responseId": "response-xxx" }
+```
+
+These messages are metadata only. Audio chunks still use binary WebSocket frames and must not wait for subtitle completion.
+
+Future optional service-provided lip-sync event:
+
+```json
+{
+  "type": "lip_sync",
+  "responseId": "response-xxx",
+  "frames": [
+    { "tMs": 0, "viseme": "A", "mouthOpen": 0.4 },
+    { "tMs": 32, "viseme": "O", "mouthOpen": 0.7 }
+  ]
+}
+```
+
+Clients must treat `lip_sync` as optional. If it is absent, the frontend should keep using local audio-energy and subtitle-based lip-frame generation. See `docs/designed/speech-link.md` for the backend plan and `frontend/doc/designed/speech-link.md` for the frontend plan.
+
 #### pronunciation_score 字段
 
 ```json
