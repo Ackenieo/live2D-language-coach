@@ -4,6 +4,21 @@ server:
 spring:
   application:
     name: live2D-language-coach
+  cloud:
+    sentinel:
+      filter:
+        enabled: false
+      transport:
+        dashboard: ${SENTINEL_DASHBOARD:localhost:8858}
+        port: ${SENTINEL_TRANSPORT_PORT:8719}
+      eager: true
+      http-method-specify: true
+      datasource:
+        flow-rules:
+          file:
+            file: classpath:sentinel/flow-rules.json
+            data-type: json
+            rule-type: flow
   
   datasource:
     url: jdbc:mysql://localhost:3381/live2d_language_coach?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true

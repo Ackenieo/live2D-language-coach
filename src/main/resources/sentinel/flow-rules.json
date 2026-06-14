@@ -1,0 +1,122 @@
+[
+  {
+    "resource": "POST:/api/auth/sms/send",
+    "limitApp": "default",
+    "grade": 1,
+    "count": 5.0,
+    "strategy": 0,
+    "controlBehavior": 0
+  },
+  {
+    "resource": "POST:/api/auth/login",
+    "limitApp": "default",
+    "grade": 1,
+    "count": 20.0,
+    "strategy": 0,
+    "controlBehavior": 0
+  },
+  {
+    "resource": "POST:/api/auth/refresh",
+    "limitApp": "default",
+    "grade": 1,
+    "count": 50.0,
+    "strategy": 0,
+    "controlBehavior": 0
+  },
+  {
+    "resource": "GET:/api/user/profile",
+    "limitApp": "default",
+    "grade": 1,
+    "count": 100.0,
+    "strategy": 0,
+    "controlBehavior": 0
+  },
+  {
+    "resource": "PUT:/api/user/profile",
+    "limitApp": "default",
+    "grade": 1,
+    "count": 30.0,
+    "strategy": 0,
+    "controlBehavior": 0
+  },
+  {
+    "resource": "PUT:/api/user/phone",
+    "limitApp": "default",
+    "grade": 1,
+    "count": 10.0,
+    "strategy": 0,
+    "controlBehavior": 0
+  },
+  {
+    "resource": "POST:/api/user/avatar",
+    "limitApp": "default",
+    "grade": 1,
+    "count": 10.0,
+    "strategy": 0,
+    "controlBehavior": 0
+  },
+  {
+    "resource": "GET:/api/chat/sessions/{sessionId}/history",
+    "limitApp": "default",
+    "grade": 1,
+    "count": 50.0,
+    "strategy": 0,
+    "controlBehavior": 0
+  },
+  {
+    "resource": "DELETE:/api/chat/sessions/{sessionId}/history",
+    "limitApp": "default",
+    "grade": 1,
+    "count": 20.0,
+    "strategy": 0,
+    "controlBehavior": 0
+  },
+  {
+    "resource": "GET:/api/chat/sessions/{sessionId}/summary",
+    "limitApp": "default",
+    "grade": 1,
+    "count": 50.0,
+    "strategy": 0,
+    "controlBehavior": 0
+  },
+  {
+    "resource": "GET:/api/chat/report/{sessionId}",
+    "limitApp": "default",
+    "grade": 1,
+    "count": 50.0,
+    "strategy": 0,
+    "controlBehavior": 0
+  },
+  {
+    "resource": "GET:/api/chat/history",
+    "limitApp": "default",
+    "grade": 1,
+    "count": 50.0,
+    "strategy": 0,
+    "controlBehavior": 0
+  },
+  {
+    "resource": "GET:/api/leaderboard",
+    "limitApp": "default",
+    "grade": 1,
+    "count": 80.0,
+    "strategy": 0,
+    "controlBehavior": 0
+  },
+  {
+    "resource": "GET:/api/leaderboard/my-rank",
+    "limitApp": "default",
+    "grade": 1,
+    "count": 80.0,
+    "strategy": 0,
+    "controlBehavior": 0
+  },
+  {
+    "resource": "WS:/ws/bailian",
+    "limitApp": "default",
+    "grade": 1,
+    "count": 30.0,
+    "strategy": 0,
+    "controlBehavior": 0
+  }
+]
