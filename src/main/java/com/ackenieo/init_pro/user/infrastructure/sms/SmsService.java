@@ -42,7 +42,7 @@ public class SmsService {
 
         redisTemplate.opsForValue().set(key, code, CODE_EXPIRE_MINUTES, TimeUnit.MINUTES);
 
-        sendSms(phone, code);
+        //sendSms(phone, code);
         log.info("\u9a8c\u8bc1\u7801\u5df2\u751f\u6210\u5e76\u53d1\u9001: phone={}, code={}", phone, code);
     }
 

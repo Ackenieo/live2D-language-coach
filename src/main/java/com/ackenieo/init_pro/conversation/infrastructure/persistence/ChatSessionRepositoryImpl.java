@@ -22,10 +22,10 @@ public class ChatSessionRepositoryImpl implements ChatSessionRepository {
 
     @Override
     public ChatSession save(ChatSession session) {
-        if (session.getId() == null) {
-            chatSessionMapper.insert(session);
-        } else {
+        if (session.getId() != null && chatSessionMapper.selectById(session.getId()) != null) {
             chatSessionMapper.updateById(session);
+        } else {
+            chatSessionMapper.insert(session);
         }
         return session;
     }

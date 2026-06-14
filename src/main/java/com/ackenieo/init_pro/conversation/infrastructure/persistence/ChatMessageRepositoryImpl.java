@@ -19,10 +19,10 @@ public class ChatMessageRepositoryImpl implements ChatMessageRepository {
 
     @Override
     public ChatMessage save(ChatMessage message) {
-        if (message.getId() == null) {
-            chatMessageMapper.insert(message);
-        } else {
+        if (message.getId() != null && chatMessageMapper.selectById(message.getId()) != null) {
             chatMessageMapper.updateById(message);
+        } else {
+            chatMessageMapper.insert(message);
         }
         return message;
     }
