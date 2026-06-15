@@ -1,4 +1,4 @@
-## 视频连接地址（b站 高清版本）：https://www.bilibili.com/video/BV1c2JM6kEMB/?share_source=copy_web&vd_source=a53b9b4b43d368335910c197981e4139
+## 视频连接地址（b站 高清版本）： https://www.bilibili.com/video/BV11HJ36xEeG/?share_source=copy_web&vd_source=a53b9b4b43d368335910c197981e4139
 ## 前端仓库地址：https://github.com/Ackenieo/live2D-language-coach-frontend
 ## 额外的设计文档地址：https://github.com/Ackenieo/live2D-language-coach/blob/main/submission-design.md
 
@@ -21,7 +21,7 @@
 | 视觉理解准确性 | 采用按轮次发送最新画面、场景提示词和视觉开关，避免过期帧干扰模型判断 |
 | 语音自然度与流畅性 | 二进制音频流式转发，前端提前调度音频播放，并用实际播放音量驱动 Live2D 嘴型 |
 | 端云协同成本控制 | pHash 去重、240x180 JPEG、视觉开关、每轮只发送最新帧、Redis 会话记忆 TTL、Sentinel 限流、评分异步化 |
-| 额外设计文档 | 见 [docs/designed/ai-vision-dialogue-assistant-design.md](docs/designed/ai-vision-dialogue-assistant-design.md) |
+| 额外设计文档 | 见  https://github.com/Ackenieo/live2D-language-coach/blob/main/submission-design.md|
 
 ## 核心功能
 
