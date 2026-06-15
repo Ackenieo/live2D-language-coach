@@ -1,6 +1,6 @@
-视频连接（飞书 模糊画质）：https://icnqirc7uv98.feishu.cn/drive/folder/HDdGf7BpzlQiETd8OFDcV9fHnle
-视频连接地址（b站 高清版本）：在等审核
-前端仓库地址：https://github.com/Ackenieo/live2D-language-coach-frontend
+## 视频连接地址（b站 高清版本）：https://www.bilibili.com/video/BV1c2JM6kEMB/?share_source=copy_web&vd_source=a53b9b4b43d368335910c197981e4139
+## 前端仓库地址：https://github.com/Ackenieo/live2D-language-coach-frontend
+## 额外的设计文档地址：
 
 
 # 题目一：AI 视觉对话助手
