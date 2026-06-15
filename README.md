@@ -1,4 +1,8 @@
-视频连接：https://icnqirc7uv98.feishu.cn/drive/folder/HDdGf7BpzlQiETd8OFDcV9fHnle
+视频连接（飞书 模糊画质）：https://icnqirc7uv98.feishu.cn/drive/folder/HDdGf7BpzlQiETd8OFDcV9fHnle
+视频连接地址（b站 高清版本）：在等审核
+前端仓库地址：https://github.com/Ackenieo/live2D-language-coach-frontend
+
+
 # 题目一：AI 视觉对话助手
 
 本项目实现了一款面向英语口语陪练场景的 AI 视觉对话助手：用户在浏览器中开启麦克风和摄像头，与 AI 进行实时语音对话；AI 可以接收用户语音和摄像头画面上下文，返回流式语音、字幕、纠错和评分反馈。前端使用 Live2D 角色承载对话体验，后端使用 Spring Boot 按 DDD 分层组织实时对话、用户、评测、会话报告和排行榜模块。
