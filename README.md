@@ -1,6 +1,6 @@
 ## 视频连接地址（b站 高清版本）：https://www.bilibili.com/video/BV1c2JM6kEMB/?share_source=copy_web&vd_source=a53b9b4b43d368335910c197981e4139
 ## 前端仓库地址：https://github.com/Ackenieo/live2D-language-coach-frontend
-## 额外的设计文档地址：
+## 额外的设计文档地址：https://github.com/Ackenieo/live2D-language-coach/blob/main/submission-design.md
 
 
 # 题目一：AI 视觉对话助手
